@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import helmet from "helmet";
 import chatNormalRouter from "./routes/chatNormal.js";
+import adiRouter from "./routes/adi.js";
 
 const app = express();
 
@@ -21,6 +22,9 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 
 // ✅ chat routes
 app.use("/chat/normal", chatNormalRouter);
+
+// ✅ ADI routes
+app.use("/adi", adiRouter);
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`API on ${PORT}`));

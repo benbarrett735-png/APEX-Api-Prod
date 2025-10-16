@@ -14,5 +14,16 @@
     "types": ["node"]
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["dist", "node_modules", "scripts", "src/routes/adi.ts", "src/routes/agentic*.ts", "src/routes/reports.ts", "src/routes/charts.ts", "src/routes/research*.ts", "src/services/**"]
+  "exclude": [
+    "dist",
+    "node_modules",
+    "scripts",
+    "src/routes/agentic*.ts",
+    "src/routes/reports.ts",
+    "src/routes/charts.ts",
+    "src/routes/research*.ts",
+    "src/services/chartService.ts",
+    "src/services/agenticFlow.ts",
+    "src/services/researchFlow.ts"
+  ]
 }
