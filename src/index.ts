@@ -1,9 +1,7 @@
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
-import { requireAuth } from "./middleware/requireAuth.js";
 import chatNormalRouter from "./routes/chatNormal.js";
-import chatAgentRouter from "./routes/chatAgent.js";
 import adiRouter from "./routes/adi.js";
 import agenticFlowRouter from "./routes/agentic-flow.js";
 
@@ -18,20 +16,19 @@ app.use(cors({
 }));
 
 app.use(helmet());
-app.use(express.json({ limit: "10mb" })); // Increase for large file contexts
+app.use(express.json({ limit: "10mb" }));
 
 // health (no auth)
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
-// ✅ chat routes (with auth)
-app.use("/chat/normal", requireAuth, chatNormalRouter);
-app.use("/chat/agent", requireAuth, chatAgentRouter);
+// ✅ chat routes
+app.use("/chat/normal", chatNormalRouter);
 
-// ✅ ADI routes (with auth)
-app.use("/adi", requireAuth, adiRouter);
+// ✅ ADI routes
+app.use("/adi", adiRouter);
 
-// ✅ Agentic flow routes (with auth)
-app.use("/agentic-flow", requireAuth, agenticFlowRouter);
+// ✅ Agentic flow routes
+app.use("/agentic-flow", agenticFlowRouter);
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`API on ${PORT}`));
