@@ -32,5 +32,13 @@ app.get("/secure/ping", requireAuth, (req, res) => {
   });
 });
 
+app.post("/chat/normal", requireAuth, async (req, res) => {
+  res.status(200).json({
+    ok: true,
+    message: "stub",
+    echo: req.body ?? null,
+  });
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`API running on ${PORT}`));
