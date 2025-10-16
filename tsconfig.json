@@ -17,10 +17,6 @@
   "exclude": [
     "dist",
     "node_modules",
-    "scripts",
-    "src/services/chartService.ts",
-    "src/routes/charts.ts",
-    "src/services/agenticFlow.ts",
-    "src/services/researchFlow.ts"
+    "scripts"
   ]
 }

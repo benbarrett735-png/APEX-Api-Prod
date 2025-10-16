@@ -453,7 +453,7 @@ Extract and format the data from the user's request into the correct JSON struct
         throw new Error(`APIM API error: ${response.status} - ${response.statusText}`);
       }
 
-      const result = await response.json();
+      const result = await response.json() as any;
       const content = result.choices?.[0]?.message?.content || result.choices?.[0]?.text || '';
       
       try {
@@ -596,7 +596,7 @@ Respond with just the JSON:`;
         throw new Error(`APIM analysis failed: ${response.status} - ${errorText}`);
       }
 
-      const result = await response.json();
+      const result = await response.json() as any;
       const content = result.choices[0]?.message?.content || '';
       
       // Parse the JSON response
@@ -888,7 +888,7 @@ REQUIREMENTS:
         throw new Error(`OpenAI API error: ${response.status} - ${errorText}`);
       }
 
-      const result = await response.json();
+      const result = await response.json() as any;
       const content = result.choices[0]?.message?.content || '';
       
       console.log('[ChartService] OpenAI search response:', content.substring(0, 500));
@@ -971,7 +971,7 @@ REQUIREMENTS:
         throw new Error(`APIM request failed: ${response.status} - ${errorText}`);
       }
 
-      const result = await response.json();
+      const result = await response.json() as any;
       const content = result.choices[0]?.message?.content || '';
 
       // Parse the JSON from the response
