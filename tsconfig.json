@@ -18,11 +18,8 @@
     "dist",
     "node_modules",
     "scripts",
-    "src/routes/agentic*.ts",
-    "src/routes/reports.ts",
-    "src/routes/charts.ts",
-    "src/routes/research*.ts",
     "src/services/chartService.ts",
+    "src/routes/charts.ts",
     "src/services/agenticFlow.ts",
     "src/services/researchFlow.ts"
   ]
