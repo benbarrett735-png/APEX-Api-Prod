@@ -1,0 +1,131 @@
+[
+  {
+    "Name": "PORT",
+    "Value": "3000"
+  },
+  {
+    "Name": "NODE_ENV",
+    "Value": "staging"
+  },
+  {
+    "Name": "OIDC_AUTHORITY",
+    "Value": "https://cognito-idp.eu-west-1.amazonaws.com/eu-west-1_JiQF0xM04"
+  },
+  {
+    "Name": "OIDC_CLIENT_ID",
+    "Value": "6mvn1gc775h8ibei5phrkk60l1"
+  },
+  {
+    "Name": "OIDC_AUDIENCE",
+    "Value": "6mvn1gc775h8ibei5phrkk60l1"
+  },
+  {
+    "Name": "CORS_ORIGIN",
+    "Value": "https://staging.d2umjimd2ilqq7.amplifyapp.com"
+  },
+  {
+    "Name": "DATABASE_URL",
+    "Value": "REPLACE_WITH_ACTUAL_VALUE"
+  },
+  {
+    "Name": "PGSSL",
+    "Value": "true"
+  },
+  {
+    "Name": "OPENAI_API_KEY",
+    "Value": "REPLACE_WITH_ACTUAL_VALUE"
+  },
+  {
+    "Name": "OPEN_AI_KEY",
+    "Value": "REPLACE_WITH_ACTUAL_VALUE"
+  },
+  {
+    "Name": "CHAT_MODEL_MINI",
+    "Value": "gpt-3.5-turbo"
+  },
+  {
+    "Name": "CHAT_MODEL_STRONG",
+    "Value": "gpt-4"
+  },
+  {
+    "Name": "CHAT_PATH_MINI",
+    "Value": "/v1/chat/completions"
+  },
+  {
+    "Name": "CHAT_PATH_STRONG",
+    "Value": "/v1/chat/completions"
+  },
+  {
+    "Name": "CHAT_URL_MINI",
+    "Value": "https://api.openai.com/v1/chat/completions"
+  },
+  {
+    "Name": "CHAT_URL_STRONG",
+    "Value": "https://api.openai.com/v1/chat/completions"
+  },
+  {
+    "Name": "MODEL",
+    "Value": "gpt-4"
+  },
+  {
+    "Name": "APIM_HOST",
+    "Value": "REPLACE_WITH_ACTUAL_VALUE_OR_REMOVE"
+  },
+  {
+    "Name": "APIM_SUBSCRIPTION_KEY",
+    "Value": "REPLACE_WITH_ACTUAL_VALUE_OR_REMOVE"
+  },
+  {
+    "Name": "APIM_OPERATION",
+    "Value": "REPLACE_WITH_ACTUAL_VALUE_OR_REMOVE"
+  },
+  {
+    "Name": "API_URL",
+    "Value": "REPLACE_WITH_ACTUAL_VALUE_OR_REMOVE"
+  },
+  {
+    "Name": "ADI_ANALYZE_URL",
+    "Value": "REPLACE_WITH_ACTUAL_VALUE_OR_REMOVE"
+  },
+  {
+    "Name": "ADI_ANALYZE_PATH",
+    "Value": "REPLACE_WITH_ACTUAL_VALUE_OR_REMOVE"
+  },
+  {
+    "Name": "ADI_RESULT_URL",
+    "Value": "REPLACE_WITH_ACTUAL_VALUE_OR_REMOVE"
+  },
+  {
+    "Name": "ADI_RESULT_PATH",
+    "Value": "REPLACE_WITH_ACTUAL_VALUE_OR_REMOVE"
+  },
+  {
+    "Name": "ADI_API_VERSION",
+    "Value": "REPLACE_WITH_ACTUAL_VALUE_OR_REMOVE"
+  },
+  {
+    "Name": "ADI_MODEL_ID",
+    "Value": "REPLACE_WITH_ACTUAL_VALUE_OR_REMOVE"
+  },
+  {
+    "Name": "ADI_ANALYZE_OVERLOAD",
+    "Value": "REPLACE_WITH_ACTUAL_VALUE_OR_REMOVE"
+  },
+  {
+    "Name": "AZURE_STORAGE_CONNECTION_STRING",
+    "Value": "REPLACE_WITH_ACTUAL_VALUE_OR_REMOVE"
+  },
+  {
+    "Name": "HTTP_TIMEOUT_MS",
+    "Value": "30000"
+  },
+  {
+    "Name": "POLL_INTERVAL_MS",
+    "Value": "1000"
+  },
+  {
+    "Name": "POLL_MAX_SECONDS",
+    "Value": "300"
+  }
+]
+

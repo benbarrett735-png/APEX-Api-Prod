@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { ENV, MODELS, apimUrl, pathWithParams } from "@nomadapex/config";
+import { ENV, MODELS, apimUrl, pathWithParams } from "../config/index.js";
 import { generateWriteBlobSasUrl, generateReadBlobSasUrl } from "../services/azureBlob.js";
 
 const r = Router();

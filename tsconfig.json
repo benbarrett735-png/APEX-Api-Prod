@@ -13,6 +13,6 @@
     "lib": ["ES2022"],
     "types": ["node"]
   },
-  "include": ["src/index.ts", "src/middleware/**/*.ts"],
-  "exclude": ["node_modules", "dist", "src/routes", "src/services", "src/db", "src/lib", "src/clients", "src/utils"]
+  "include": ["src/**/*.ts"],
+  "exclude": ["dist", "node_modules", "scripts", "src/routes/adi.ts", "src/routes/agentic*.ts", "src/routes/reports.ts", "src/routes/charts.ts", "src/routes/research*.ts", "src/services/**"]
 }
