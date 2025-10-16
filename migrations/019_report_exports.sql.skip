@@ -1,0 +1,50 @@
+-- Migration 019: Report Exports Tables
+-- Creates tables for report export functionality
+
+-- Report exports table
+CREATE TABLE IF NOT EXISTS report_exports (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id UUID NOT NULL REFERENCES apex_sessions(id) ON DELETE CASCADE,
+    format VARCHAR(10) NOT NULL, -- 'pdf', 'docx', 'html'
+    file_path TEXT NOT NULL,
+    file_size INTEGER NOT NULL,
+    download_count INTEGER DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Report sharing table
+CREATE TABLE IF NOT EXISTS report_shares (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id UUID NOT NULL REFERENCES apex_sessions(id) ON DELETE CASCADE,
+    share_token VARCHAR(100) UNIQUE NOT NULL,
+    expires_at TIMESTAMP WITH TIME ZONE,
+    access_count INTEGER DEFAULT 0,
+    max_access_count INTEGER,
+    created_by UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Indexes for performance
+CREATE INDEX IF NOT EXISTS idx_report_exports_session_id ON report_exports(session_id);
+CREATE INDEX IF NOT EXISTS idx_report_exports_format ON report_exports(format);
+CREATE INDEX IF NOT EXISTS idx_report_exports_created_at ON report_exports(created_at);
+
+CREATE INDEX IF NOT EXISTS idx_report_shares_session_id ON report_shares(session_id);
+CREATE INDEX IF NOT EXISTS idx_report_shares_token ON report_shares(share_token);
+CREATE INDEX IF NOT EXISTS idx_report_shares_expires_at ON report_shares(expires_at);
+CREATE INDEX IF NOT EXISTS idx_report_shares_created_by ON report_shares(created_by);
+
+-- Update trigger for report_exports
+CREATE OR REPLACE FUNCTION update_report_exports_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trigger_update_report_exports_updated_at
+    BEFORE UPDATE ON report_exports
+    FOR EACH ROW
+    EXECUTE FUNCTION update_report_exports_updated_at();
