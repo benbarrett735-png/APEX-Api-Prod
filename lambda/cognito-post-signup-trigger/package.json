@@ -1,0 +1,28 @@
+{
+  "name": "cognito-post-signup-trigger",
+  "version": "1.0.0",
+  "description": "AWS Lambda function to create database records when users sign up via Cognito",
+  "type": "module",
+  "main": "index.mjs",
+  "scripts": {
+    "install": "npm install",
+    "package": "bash deploy.sh",
+    "test": "echo 'No tests configured yet'"
+  },
+  "keywords": [
+    "aws",
+    "lambda",
+    "cognito",
+    "postgresql",
+    "signup"
+  ],
+  "author": "Nomad APEX",
+  "license": "UNLICENSED",
+  "private": true,
+  "dependencies": {
+    "pg": "^8.12.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

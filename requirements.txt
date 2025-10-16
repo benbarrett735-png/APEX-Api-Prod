@@ -1,0 +1,6 @@
+# Python dependencies for chart generation
+matplotlib==3.8.2
+numpy==1.26.3
+
+plotly>=5.0.0
+kaleido>=0.2.0

@@ -1,0 +1,26 @@
+-- Migration 021: Fix Charts Table - Remove FK Constraint
+-- The generated_charts table has a FK to apex_sessions which doesn't exist
+-- Make session_id optional and remove the constraint
+
+-- Drop the foreign key constraint on generated_charts
+ALTER TABLE IF EXISTS generated_charts 
+  DROP CONSTRAINT IF EXISTS generated_charts_session_id_fkey;
+
+-- Make session_id nullable (keep for tracking but don't enforce FK)
+ALTER TABLE IF EXISTS generated_charts 
+  ALTER COLUMN session_id DROP NOT NULL;
+
+-- Do the same for python_executions
+ALTER TABLE IF EXISTS python_executions 
+  DROP CONSTRAINT IF EXISTS python_executions_session_id_fkey;
+
+ALTER TABLE IF EXISTS python_executions 
+  ALTER COLUMN session_id DROP NOT NULL;
+
+-- Add index on session_id for performance (still useful for grouping)
+CREATE INDEX IF NOT EXISTS idx_generated_charts_session_id_nullable 
+  ON generated_charts(session_id) WHERE session_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_python_executions_session_id_nullable 
+  ON python_executions(session_id) WHERE session_id IS NOT NULL;
+
