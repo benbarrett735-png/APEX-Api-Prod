@@ -21,9 +21,9 @@ async function callAPIM(messages: any[], stream = false): Promise<any> {
 
   const url = `${APIM_HOST}${APIM_OPERATION}`;
 
-  // Create AbortController for timeout
+  // Create AbortController for timeout (5 minutes for long-running operations)
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
+  const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 minute timeout
 
   try {
     const response = await fetch(url, {
@@ -54,7 +54,7 @@ async function callAPIM(messages: any[], stream = false): Promise<any> {
   } catch (error: any) {
     clearTimeout(timeoutId);
     if (error.name === 'AbortError') {
-      throw new Error('APIM request timed out after 60 seconds');
+      throw new Error('APIM request timed out after 5 minutes');
     }
     throw error;
   }
