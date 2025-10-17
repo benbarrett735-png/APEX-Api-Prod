@@ -47,8 +47,8 @@ router.post('/runs', async (req, res) => {
       completion_criteria
     );
 
-    // Store additional context for reports and charts modes (including file content)
-    if (mode === 'reports' || mode === 'charts') {
+    // Store additional context for reports, charts, and research modes (including file content)
+    if (mode === 'reports' || mode === 'charts' || mode === 'research') {
       await dbQuery(
         `INSERT INTO agentic_events (ts, run_id, step_id, event_type, payload)
          VALUES (NOW(), $1, 'setup', 'context', $2)`,
