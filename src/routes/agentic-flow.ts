@@ -66,16 +66,19 @@ router.post('/runs', async (req, res) => {
       message: 'Agentic flow run created successfully'
     });
 
-    // Start execution asynchronously
-    console.log(`[POST /runs] Starting async execution for run ${runId}`);
-    console.log(`[POST /runs] About to call executeFlowAsync`);
-    console.log(`[POST /runs] User ID: ${userId}`);
-    console.log(`[POST /runs] Mode: ${mode || 'general'}`);
-    
-    // Call executeFlowAsync directly
-    executeFlowAsync(runId, userId, mode || 'general').catch((error) => {
-      console.error(`[POST /runs] ❌ executeFlowAsync failed:`, error.message);
-      console.error(`[POST /runs] ❌ executeFlowAsync stack:`, error.stack);
+    // Explicitly end the response to prevent App Runner from waiting
+    setImmediate(() => {
+      // Start execution asynchronously AFTER response is closed
+      console.log(`[POST /runs] Starting async execution for run ${runId}`);
+      console.log(`[POST /runs] About to call executeFlowAsync`);
+      console.log(`[POST /runs] User ID: ${userId}`);
+      console.log(`[POST /runs] Mode: ${mode || 'general'}`);
+      
+      // Call executeFlowAsync in detached context
+      executeFlowAsync(runId, userId, mode || 'general').catch((error) => {
+        console.error(`[POST /runs] ❌ executeFlowAsync failed:`, error.message);
+        console.error(`[POST /runs] ❌ executeFlowAsync stack:`, error.stack);
+      });
     });
 
   } catch (error: any) {
