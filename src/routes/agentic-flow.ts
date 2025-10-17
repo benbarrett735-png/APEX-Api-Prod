@@ -65,8 +65,11 @@ router.post('/runs', async (req, res) => {
       run_id: runId,
       message: 'Agentic flow run created successfully'
     });
+    
+    // Force close the response immediately
+    res.end();
 
-    // Explicitly end the response to prevent App Runner from waiting
+    // Explicitly detach execution from request context
     setImmediate(() => {
       // Start execution asynchronously AFTER response is closed
       console.log(`[POST /runs] Starting async execution for run ${runId}`);
