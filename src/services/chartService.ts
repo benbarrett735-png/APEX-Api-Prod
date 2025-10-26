@@ -960,15 +960,34 @@ REQUIREMENTS:
       }
     }
     
-    // CANDLESTICK: Requires "data" array with [{date, open, high, low, close}]
+    // CANDLESTICK: Requires "x" + "ohlc" (NOT "data")
     else if (type === 'candlestick') {
-      if (!payload.data || !Array.isArray(payload.data)) {
-        payload.data = [
-          { date: '2024-01', open: 100, high: 110, low: 95, close: 105 },
-          { date: '2024-02', open: 105, high: 115, low: 100, close: 110 },
-          { date: '2024-03', open: 110, high: 120, low: 105, close: 115 }
-        ];
-        console.log('[ChartService] Fixed candlestick: added data');
+      // If APIM returned "data" array, convert to x + ohlc format
+      if (payload.data && Array.isArray(payload.data) && !payload.x) {
+        payload.x = payload.data.map((d: any) => d.date || d.x || d.label);
+        payload.ohlc = payload.data.map((d: any) => ({
+          x: d.date || d.x || d.label,
+          open: d.open,
+          high: d.high,
+          low: d.low,
+          close: d.close
+        }));
+        delete payload.data;
+        console.log('[ChartService] Fixed candlestick: converted data to x + ohlc');
+      }
+      
+      // Fallback if still missing
+      if (!payload.x || !payload.ohlc) {
+        const dates = ['Jan', 'Feb', 'Mar', 'Apr', 'May'];
+        payload.x = dates;
+        payload.ohlc = dates.map((d, i) => ({
+          x: d,
+          open: 100 + i * 5,
+          high: 110 + i * 5,
+          low: 95 + i * 5,
+          close: 105 + i * 5
+        }));
+        console.log('[ChartService] Fixed candlestick: added fallback x + ohlc');
       }
     }
     
@@ -1711,19 +1730,30 @@ Required JSON structure:
     } else if (chartType === 'candlestick') {
       prompt += `Create a candlestick/OHLC chart with 8-12 time periods.
 
-CRITICAL: Even if the topic is not financial, create simulated OHLC data representing highs/lows over time.
-For "ai usage": show adoption rates with open (start), high (peak), low (minimum), close (end) for each month.
-
 Return ONLY valid JSON (no explanations):
 {
-  "data": [
-    {"date": "Jan", "open": 100, "high": 120, "low": 95, "close": 115},
-    {"date": "Feb", "open": 115, "high": 130, "low": 110, "close": 125},
-    {"date": "Mar", "open": 125, "high": 140, "low": 120, "close": 135}
+  "x": ["Jan", "Feb", "Mar", "Apr", "May", "Jun"],
+  "ohlc": [
+    {"x": "Jan", "open": 100, "high": 120, "low": 95, "close": 115},
+    {"x": "Feb", "open": 115, "high": 130, "low": 110, "close": 125}
   ]
 }
 
-Rules: low ≤ open ≤ high, low ≤ close ≤ high. Use 8-12 periods minimum.`;
+Rules: low ≤ open/close ≤ high. Use 8-12 periods.`;
+    } else if (chartType === 'bubble') {
+      prompt += `Create a bubble chart with NUMERIC x values.
+
+CRITICAL: X values MUST be numbers, not strings or categories.
+
+Return ONLY valid JSON (no explanations):
+{
+  "x": [1, 2, 3, 4, 5],
+  "series": [
+    {"name": "Series A", "values": [10, 20, 30, 40, 50], "sizes": [15, 25, 35, 20, 30]}
+  ]
+}
+
+X must be numeric array like [1,2,3] or [2020,2021,2022].`;
     } else if (chartType === 'stackedbar') {
       prompt += `Create a stacked bar chart with 4-6 categories and 3-4 data series.
 
