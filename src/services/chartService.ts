@@ -1877,8 +1877,9 @@ Required JSON structure:
     console.log(`[ChartService] Output: ${outputPath}`);
 
     // Map chart types to Python script names
-    // Note: TypeScript type is 'stackedbar' and 'themeriver' but need to handle variations
+    // Handle name variations: 'stackbar' → 'stackedbar', 'theme river' → 'themeriver'
     let scriptName = chartType.toLowerCase().replace(/\s+/g, '');
+    if (scriptName === 'stackbar') scriptName = 'stackedbar';
     
     // Execute the Python script
     const scriptPath = join(process.cwd(), 'scripts', `build_${scriptName}.py`);
