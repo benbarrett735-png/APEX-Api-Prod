@@ -1451,14 +1451,18 @@ REQUIREMENTS:
   Note: Each ohlc.x must be present in x array. OHLC values must satisfy low ≤ open/close ≤ high. Creates green up candles and red down candles.`,
 
       flow: `FLOW:
-  keys: title?, nodes[{id, label, type, fill?}], edges[{from, to, label?}], options?
-  options keys: width, height, dpi, grid(bool default false), lane_spacing_px(float default 240), row_spacing_px(float default 120), route_style("orthogonal"|"curved" default "orthogonal"), arrow_color(hex default "#9CA3AF"), arrow_width(float default 1.8), label_font_size(int default 10), lane_override{id: lane}, type_styles{type: {shape, fill, text}}.
-  Note: Node types: start, end, process, decision. Supports cycles and branches. Auto-layouts with optional lane overrides.`,
+  keys: title?, nodes[{id, label, type}], edges[{from, to}], options?
+  Required structure:
+  - nodes: Each node needs id (unique), label (display name), type ("start", "end", "process", or "decision")
+  - edges: Each edge connects two nodes via their ids (from → to)
+  Example: {nodes: [{id:"1", label:"Start", type:"start"}, {id:"2", label:"End", type:"end"}], edges: [{from:"1", to:"2"}]}`,
 
       gantt: `GANTT:
   keys: title?, tasks[{label, start, end}], options?
-  options keys: width, height, dpi, grid(bool default true), bar_height_px(float default 16), row_gap_px(float default 10), bar_color(hex default "#60A5FA"), bar_alpha(float default 0.85), timeline_min(ISO date), timeline_max(ISO date), tick("month"|"week"|"auto" default "month"), today_line(ISO date), today_color(hex default "#EF4444"), label_font_size(int default 9).
-  Note: Dates in ISO YYYY-MM-DD format. End date must be >= start date. Creates timeline with task bars and optional today marker.`,
+  Required structure:
+  - tasks: Array of tasks with label (task name), start (YYYY-MM-DD), end (YYYY-MM-DD)
+  - Dates must be in ISO format, end >= start
+  Example: {tasks: [{label:"Task 1", start:"2024-01-01", end:"2024-01-15"}, {label:"Task 2", start:"2024-01-10", end:"2024-02-01"}]}`,
 
       stackedbar: `STACKEDBAR:
   keys: title?, x[string[]], series[{name, values[number[]]}], options?
