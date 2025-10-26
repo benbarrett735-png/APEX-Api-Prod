@@ -286,7 +286,10 @@ router.get('/stream/:id', async (req, res) => {
     await sleep(1000);
     
     // Check if files uploaded
-    const uploadedFiles = JSON.parse(run.uploaded_files || '[]');
+    // Note: pg returns JSONB as parsed objects, not strings
+    const uploadedFiles = Array.isArray(run.uploaded_files) 
+      ? run.uploaded_files 
+      : (run.uploaded_files ? JSON.parse(run.uploaded_files) : []);
     if (uploadedFiles.length > 0) {
       emit('thinking', {
         thought: `Found ${uploadedFiles.length} uploaded file(s). Let me analyze them first.`,
