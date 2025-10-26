@@ -1539,7 +1539,51 @@ Now transform the user's intent + data into the correct JSON for the ${chartType
     prompt += `Data:\n${JSON.stringify(data, null, 2)}\n\n`;
     
     // Chart-specific formatting instructions
-    if (chartType === 'radar') {
+    if (chartType === 'flow') {
+      prompt += `Create a process flow diagram with nodes and edges.
+If the user's goal doesn't clearly describe a process, create a generic flow that represents their topic.
+
+Required JSON structure:
+{
+  "title": "chart title",
+  "nodes": [
+    {"id": "1", "label": "Start", "type": "start"},
+    {"id": "2", "label": "Process", "type": "process"},
+    {"id": "3", "label": "End", "type": "end"}
+  ],
+  "edges": [
+    {"from": "1", "to": "2"},
+    {"from": "2", "to": "3"}
+  ]
+}`;
+    } else if (chartType === 'gantt') {
+      prompt += `Create a timeline with tasks and date ranges.
+If the user's goal doesn't clearly describe tasks, create a generic timeline that represents their topic over time.
+
+Required JSON structure:
+{
+  "title": "chart title",
+  "tasks": [
+    {"label": "Task 1", "start": "2024-01-01", "end": "2024-01-15"},
+    {"label": "Task 2", "start": "2024-01-10", "end": "2024-02-01"}
+  ]
+}`;
+    } else if (chartType === 'sankey') {
+      prompt += `Create a flow diagram showing relationships between sources and targets.
+Create nodes for categories and links for flows between them.
+
+Required JSON structure:
+{
+  "title": "chart title",
+  "nodes": [
+    {"id": "a", "label": "Source A", "col": 0},
+    {"id": "b", "label": "Target B", "col": 1}
+  ],
+  "links": [
+    {"source": "a", "target": "b", "value": 100}
+  ]
+}`;
+    } else if (chartType === 'radar') {
       prompt += `Return the formatted JSON payload for the radar chart with the following requirements:
 - Use "axes" field (NOT "x") for the radar chart axes labels
 - Each series.values array length MUST equal the length of axes array
