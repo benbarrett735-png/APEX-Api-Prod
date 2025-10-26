@@ -159,9 +159,12 @@ Create a tool-based research plan. Remember:
       { role: 'user', content: userPrompt }
     ]);
 
-    console.log('[Tool Planning] APIM response:', response.substring(0, 500));
+    // Extract content from APIM response
+    const content = response.choices?.[0]?.message?.content || '';
+    
+    console.log('[Tool Planning] APIM response:', content.substring(0, 500));
 
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       throw new Error('Failed to parse APIM response - no JSON found');
     }
@@ -420,12 +423,15 @@ CRITICAL: If charts requested, you MUST include "generate_chart: {type}" steps!`
     ];
     
     const response = await callAPIM(messages);
+
+    // Extract content from APIM response
+    const content = response.choices?.[0]?.message?.content || '';
     
     // Parse JSON from response
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       console.warn('[Plan Creation] Could not parse APIM response, using intelligent fallback');
-      console.warn('[Plan Creation] APIM response was:', response.substring(0, 500));
+      console.warn('[Plan Creation] APIM response was:', content.substring(0, 500));
       
       // Create SMART fallback using document + query context
       const subject = understanding.coreSubject || query;
@@ -610,9 +616,12 @@ Respond with ONLY valid JSON:
     ];
     
     const response = await callAPIM(messages);
+
+    // Extract content from APIM response
+    const content = response.choices?.[0]?.message?.content || '';
     
     // Parse JSON from response
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       console.warn('[Quality Assessment] Could not parse APIM response');
       return { score: 7, reasoning: 'Assessment unavailable', shouldContinue: true };
@@ -1470,6 +1479,104 @@ router.get('/health', async (req, res) => {
     res.status(500).json({
       status: 'error',
       error: error.message
+    });
+  }
+});
+
+/**
+ * POST /research/:runId/chat
+ * Follow-up conversational chat about a completed research report
+ */
+router.post('/:runId/chat', async (req, res) => {
+  try {
+    const { runId } = req.params;
+    const { message } = req.body;
+    const userId = (req as any).user?.sub;
+
+    if (!message || typeof message !== 'string' || message.trim().length === 0) {
+      return res.status(400).json({ error: 'Message is required' });
+    }
+
+    console.log('[Research Chat] Follow-up question:', { runId, userId, message: message.substring(0, 100) });
+
+    // Retrieve the research run
+    const result = await dbQuery(
+      `SELECT id, user_id, query, report_content, status, metadata
+       FROM o1_research_runs
+       WHERE id = $1 AND user_id = $2`,
+      [runId, userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Research run not found' });
+    }
+
+    const run = result.rows[0];
+
+    if (run.status !== 'completed') {
+      return res.status(400).json({ error: 'Research is not yet completed. Please wait for the report to finish.' });
+    }
+
+    if (!run.report_content || run.report_content.trim().length === 0) {
+      return res.status(400).json({ error: 'No report content available for this research.' });
+    }
+
+    // Build context for APIM
+    const reportContext = `RESEARCH REPORT (Generated for query: "${run.query}"):\n\n${run.report_content}`;
+
+    const systemPrompt = `You are a helpful research assistant. The user has just received a research report and wants to ask follow-up questions about it.
+
+CONTEXT:
+- Original research query: "${run.query}"
+- A comprehensive research report was generated (provided below)
+- User is now asking follow-up questions about this report
+
+YOUR JOB:
+- Answer questions BASED ON THE REPORT CONTENT
+- Be conversational and helpful
+- If the user asks for clarification, provide it
+- If the user asks for more detail on a specific section, expand on it
+- If the user asks something NOT in the report, acknowledge that and offer to help differently
+- Keep responses concise unless user asks for detail
+
+CRITICAL:
+- DO NOT make up information not in the report
+- DO NOT trigger new research (this is just Q&A about existing report)
+- Reference specific sections/findings from the report when answering`;
+
+    const userPrompt = `${reportContext}
+
+---
+
+USER'S FOLLOW-UP QUESTION:
+${message}
+
+Provide a helpful, conversational answer based on the research report above.`;
+
+    console.log('[Research Chat] Calling APIM for follow-up answer...');
+
+    // Call APIM for conversational response
+    const response = await callAPIM([
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt }
+    ]);
+
+    // Extract content from APIM response
+    const content = (response as any).choices?.[0]?.message?.content || response;
+    
+    console.log('[Research Chat] APIM response:', content.substring(0, 200));
+
+    return res.json({
+      run_id: runId,
+      message: content,
+      original_query: run.query
+    });
+
+  } catch (error: any) {
+    console.error('[Research Chat] Error:', error);
+    return res.status(500).json({ 
+      error: 'Failed to process follow-up question',
+      details: error.message 
     });
   }
 });
