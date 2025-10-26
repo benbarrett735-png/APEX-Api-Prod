@@ -263,31 +263,51 @@ router.get('/stream/:id', async (req, res) => {
     };
     
     // ========================================================================
-    // PHASE 2: REAL RESEARCH EXECUTION
+    // PHASE 2: DYNAMIC RESEARCH EXECUTION
     // ========================================================================
     
     const startTime = Date.now();
-    console.log('[Research] Starting real research execution...');
+    console.log('[Research] Starting dynamic research execution...');
     
     // Track all findings
     const allFindings: string[] = [];
     const sources: string[] = [];
     
-    // Initial thinking
-    emit('thinking', {
-      thought: 'Starting research analysis...',
-      thought_type: 'planning'
-    });
-    
-    emit('thinking', {
-      thought: `Analyzing query: "${run.query.substring(0, 100)}${run.query.length > 100 ? '...' : ''}"`,
-      thought_type: 'analyzing'
-    });
-    
-    // Parse uploaded files
+    // Parse uploaded files first
     const uploadedFiles = Array.isArray(run.uploaded_files) 
       ? run.uploaded_files 
       : (run.uploaded_files ? JSON.parse(run.uploaded_files) : []);
+    
+    // Initial analysis - determine research strategy
+    emit('thinking', {
+      thought: 'Analyzing your query to determine the best research approach...',
+      thought_type: 'planning'
+    });
+    
+    // Analyze query complexity and type
+    const queryLower = run.query.toLowerCase();
+    const hasComparison = queryLower.includes('compare') || queryLower.includes('vs') || queryLower.includes('versus');
+    const hasTimeline = queryLower.includes('history') || queryLower.includes('timeline') || queryLower.includes('evolution');
+    const hasAnalysis = queryLower.includes('analyze') || queryLower.includes('breakdown') || queryLower.includes('evaluate');
+    const hasData = queryLower.includes('data') || queryLower.includes('statistics') || queryLower.includes('metrics');
+    
+    // Determine research depth dynamically
+    let estimatedSteps = 5; // Base
+    if (run.depth === 'comprehensive') estimatedSteps = 12;
+    else if (run.depth === 'long') estimatedSteps = 9;
+    else if (run.depth === 'medium') estimatedSteps = 7;
+    else estimatedSteps = 5;
+    
+    // Adjust based on query type
+    if (hasComparison) estimatedSteps += 2;
+    if (hasTimeline) estimatedSteps += 2;
+    if (hasAnalysis) estimatedSteps += 1;
+    if (uploadedFiles.length > 0) estimatedSteps += 2;
+    
+    emit('thinking', {
+      thought: `Query type: ${hasComparison ? 'Comparative analysis' : hasTimeline ? 'Historical research' : hasAnalysis ? 'Deep analysis' : 'Informational research'}. Planning ${estimatedSteps} research steps.`,
+      thought_type: 'planning'
+    });
     
     // Phase 2A: Process uploaded files (if any)
     // NOTE: Currently Portal doesn't send file content, only IDs
@@ -347,11 +367,19 @@ router.get('/stream/:id', async (req, res) => {
       });
     }
     
-    // Phase 2C: Generate report sections
+    // Phase 2C: Generate report sections (dynamic based on findings)
     emit('thinking', {
-      thought: `Based on my analysis of ${allFindings.length} findings, I can now create a coherent report with key insights and recommendations.`,
+      thought: `Synthesizing ${allFindings.length} findings from ${sources.length} sources into a comprehensive report...`,
       thought_type: 'synthesis'
     });
+    
+    // Determine sections based on query type
+    const sections: string[] = ['Executive Summary', 'Key Findings'];
+    if (hasComparison) sections.push('Comparative Analysis');
+    if (hasTimeline) sections.push('Historical Context');
+    if (hasAnalysis) sections.push('Detailed Analysis');
+    if (hasData) sections.push('Data & Metrics');
+    sections.push('Recommendations', 'Conclusion');
     
     // Generate Executive Summary (with error handling)
     let execSummary = 'Analysis of research findings';
@@ -370,7 +398,7 @@ router.get('/stream/:id', async (req, res) => {
     });
     
     emit('thinking', {
-      thought: 'Let me add detailed findings and supporting evidence.',
+      thought: `Building ${sections.length} sections based on your query type and the findings collected.`,
       thought_type: 'writing'
     });
     
@@ -385,7 +413,7 @@ router.get('/stream/:id', async (req, res) => {
     });
     
     emit('thinking', {
-      thought: 'Finalizing the report with actionable recommendations.',
+      thought: 'Finalizing with recommendations and actionable insights.',
       thought_type: 'final_review'
     });
     
