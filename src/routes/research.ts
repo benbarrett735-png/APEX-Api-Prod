@@ -87,9 +87,15 @@ Respond with ONLY valid JSON:
 // Types
 // ============================================================================
 
+interface UploadedFile {
+  uploadId: string;
+  fileName: string;
+  content?: string; // ADI-extracted text
+}
+
 interface ResearchStartRequest {
   query: string;
-  uploaded_files?: string[];
+  uploaded_files?: string[] | UploadedFile[]; // Can be string IDs or full objects with content
   depth: 'short' | 'medium' | 'long' | 'comprehensive';
   include_charts?: string[];
   target_sources?: string[];
@@ -388,7 +394,7 @@ router.get('/stream/:id', async (req, res) => {
       });
       
       // Check if files have content (ADI-extracted)
-      const filesWithContent = uploadedFiles.filter(f => f.content && f.content.trim().length > 0);
+      const filesWithContent = uploadedFiles.filter((f: any) => f.content && f.content.trim().length > 0) as UploadedFile[];
       
       if (filesWithContent.length > 0) {
         emit('tool.call', {
@@ -399,7 +405,7 @@ router.get('/stream/:id', async (req, res) => {
         try {
           // Combine all file contents
           const combinedContent = filesWithContent
-            .map(f => `### ${f.fileName}\n\n${f.content}`)
+            .map((f: UploadedFile) => `### ${f.fileName}\n\n${f.content}`)
             .join('\n\n---\n\n');
           
           console.log(`[Research] Processing ${filesWithContent.length} files with content (${combinedContent.length} chars total)`);
@@ -418,7 +424,7 @@ router.get('/stream/:id', async (req, res) => {
             .slice(0, 10); // Top 10 findings from documents
           
           allFindings.push(...documentFindings);
-          sources.push(...filesWithContent.map(f => `Uploaded: ${f.fileName}`));
+          sources.push(...filesWithContent.map((f: UploadedFile) => `Uploaded: ${f.fileName}`));
           
           emit('tool.result', {
             tool: 'document_analysis',
@@ -429,8 +435,8 @@ router.get('/stream/:id', async (req, res) => {
           emit('thinking', {
             thought: `Extracted ${documentFindings.length} key findings from your uploaded documents. Let me complement this with external research.`,
             thought_type: 'analyzing'
-          });
-        } catch (error: any) {
+    });
+  } catch (error: any) {
           console.error('[Research] Document analysis error:', error);
           emit('tool.result', {
             tool: 'document_analysis',
