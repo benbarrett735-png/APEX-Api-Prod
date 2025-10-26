@@ -1024,6 +1024,45 @@ REQUIREMENTS:
       delete payload.series;
     }
     
+    // SANKEY: Requires "nodes" and "links"
+    else if (type === 'sankey') {
+      if (!payload.nodes || !payload.links) {
+        payload.nodes = [
+          { id: 'a', label: 'Source A', col: 0 },
+          { id: 'b', label: 'Target B', col: 1 }
+        ];
+        payload.links = [
+          { source: 'a', target: 'b', value: 100 }
+        ];
+        console.log('[ChartService] Fixed sankey: added fallback nodes/links');
+      }
+    }
+    
+    // FLOW: Requires "nodes" and "edges"
+    else if (type === 'flow') {
+      if (!payload.nodes || !payload.edges) {
+        payload.nodes = [
+          { id: 'start', label: 'Start', type: 'start' },
+          { id: 'end', label: 'End', type: 'end' }
+        ];
+        payload.edges = [
+          { from: 'start', to: 'end' }
+        ];
+        console.log('[ChartService] Fixed flow: added fallback nodes/edges');
+      }
+    }
+    
+    // GANTT: Requires "tasks"
+    else if (type === 'gantt') {
+      if (!payload.tasks) {
+        payload.tasks = [
+          { label: 'Task 1', start: '2024-01-01', end: '2024-01-15' },
+          { label: 'Task 2', start: '2024-01-10', end: '2024-02-01' }
+        ];
+        console.log('[ChartService] Fixed gantt: added fallback tasks');
+      }
+    }
+    
     // STANDARD CHARTS: Require "x" and "series"
     else if (['line', 'area', 'bar', 'scatter', 'bubble', 'stackbar', 'themeriver', 'graph'].includes(type)) {
       if (!payload.x) {
