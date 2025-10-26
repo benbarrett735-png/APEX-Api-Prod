@@ -2,10 +2,12 @@
  * File Retrieval Service
  * Phase 2: Retrieve uploaded file content for research
  * 
- * Per Kevin's plan:
- * - Files are parsed by ADI during upload
- * - Content is stored in database with uploadId
- * - Research retrieves by uploadId
+ * UPDATED: Portal passes file content directly (not stored in DB yet)
+ * Files are parsed by ADI and content returned to Portal
+ * Portal stores temporarily and sends uploadId to research
+ * 
+ * TODO: In future, store file content in database for retrieval
+ * For now, Portal needs to send file content in request
  */
 
 import { query as dbQuery } from '../db/query.js';
@@ -20,14 +22,15 @@ interface FileContent {
 
 /**
  * Retrieve file content by upload ID
- * Files were already parsed by ADI during upload via /adi/analyze
+ * 
+ * NOTE: Current implementation expects Portal to send file content
+ * Future: Query uploads table when file storage is implemented
  */
 export async function getFileContent(uploadId: string): Promise<FileContent> {
   try {
-    console.log('[File Retrieval] Fetching content for:', uploadId);
+    console.log('[File Retrieval] Attempting to fetch content for:', uploadId);
 
-    // Query uploads table for file content
-    // Note: uploads table created in earlier migrations (004_uploads_indexes.sql)
+    // Try to query uploads table (if implemented)
     const result = await dbQuery(
       `SELECT 
         id as upload_id,
@@ -41,7 +44,9 @@ export async function getFileContent(uploadId: string): Promise<FileContent> {
     );
 
     if (result.rows.length === 0) {
-      throw new Error(`File not found: ${uploadId}`);
+      // File not in database - this is expected currently
+      console.warn('[File Retrieval] File not found in database:', uploadId);
+      throw new Error(`File not stored in database. Portal should send file content directly.`);
     }
 
     const row = result.rows[0];
@@ -66,7 +71,7 @@ export async function getFileContent(uploadId: string): Promise<FileContent> {
 
   } catch (error: any) {
     console.error('[File Retrieval] Error:', error);
-    throw new Error(`Failed to retrieve file: ${error.message}`);
+    throw error; // Propagate error to caller
   }
 }
 

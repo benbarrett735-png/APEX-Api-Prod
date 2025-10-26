@@ -290,50 +290,22 @@ router.get('/stream/:id', async (req, res) => {
       : (run.uploaded_files ? JSON.parse(run.uploaded_files) : []);
     
     // Phase 2A: Process uploaded files (if any)
+    // NOTE: Currently Portal doesn't send file content, only IDs
+    // File processing will be skipped until Portal integration is updated
     if (uploadedFiles.length > 0) {
       emit('thinking', {
-        thought: `Found ${uploadedFiles.length} uploaded file(s). Let me analyze them first using our secure APIM service.`,
+        thought: `Found ${uploadedFiles.length} uploaded file(s) mentioned. Note: File content processing coming soon - proceeding with web research for now.`,
         thought_type: 'planning'
       });
       
-      emit('tool.call', {
-        tool: 'apim_process',
-        purpose: 'Analyze uploaded documents securely',
-        args: { file_count: uploadedFiles.length }
-      });
+      console.log('[Research] Files were uploaded but content not available yet:', uploadedFiles);
+      console.log('[Research] TODO: Update Portal to send file content or implement file storage');
       
-      try {
-        // Retrieve file contents
-        const files = await getMultipleFiles(uploadedFiles);
-        const combinedContent = combineFileContents(files);
-        
-        // Analyze with APIM (secure, keeps data internal)
-        const fileAnalysis = await generateSectionSummary(
-          'Document Analysis',
-          [combinedContent]
-        );
-        
-        allFindings.push(`**From Uploaded Documents:**\n${fileAnalysis}`);
-        sources.push(...files.map(f => `Uploaded file: ${f.fileName}`));
-        
-        emit('tool.result', {
-          tool: 'apim_process',
-          findings_count: files.length,
-          key_insights: fileAnalysis.substring(0, 150) + '...'
-        });
-        
-        emit('thinking', {
-          thought: 'The uploaded documents contain valuable insights. Let me now broaden the research with external sources.',
-          thought_type: 'synthesis'
-        });
-        
-      } catch (error: any) {
-        console.error('[Research] File processing error:', error);
-        emit('thinking', {
-          thought: `Could not process uploaded files: ${error.message}. Continuing with web research.`,
-          thought_type: 'pivot'
-        });
-      }
+      // Skip file processing for now, go straight to web search
+      emit('thinking', {
+        thought: 'Proceeding with external web research to answer your query.',
+        thought_type: 'planning'
+      });
     } else {
       emit('thinking', {
         thought: 'No uploaded files. I\'ll search for external information to answer this query.',
@@ -381,11 +353,20 @@ router.get('/stream/:id', async (req, res) => {
       thought_type: 'synthesis'
     });
     
-    // Generate Executive Summary
-    const execSummary = await generateSectionSummary('Executive Summary', allFindings.slice(0, 3));
+    // Generate Executive Summary (with error handling)
+    let execSummary = 'Analysis of research findings';
+    try {
+      if (allFindings.length > 0) {
+        execSummary = await generateSectionSummary('Executive Summary', allFindings.slice(0, 3));
+      }
+    } catch (error: any) {
+      console.error('[Research] Executive summary generation error:', error);
+      execSummary = `Research on "${run.query}" with ${allFindings.length} findings from ${sources.length} sources.`;
+    }
+    
     emit('section.completed', {
       section: 'Executive Summary',
-      preview: execSummary.substring(0, 200) + '...'
+      preview: execSummary.substring(0, 200) + (execSummary.length > 200 ? '...' : '')
     });
     
     emit('thinking', {
@@ -394,7 +375,10 @@ router.get('/stream/:id', async (req, res) => {
     });
     
     // Generate Key Findings preview
-    const keyFindingsPreview = allFindings.slice(0, 5).map((f, i) => `${i + 1}. ${f.substring(0, 80)}...`).join('\n');
+    const keyFindingsPreview = allFindings.length > 0
+      ? allFindings.slice(0, 5).map((f, i) => `${i + 1}. ${f.substring(0, 80)}${f.length > 80 ? '...' : ''}`).join('\n')
+      : '1. Research findings being compiled...';
+    
     emit('section.completed', {
       section: 'Key Findings',
       preview: keyFindingsPreview
@@ -405,24 +389,41 @@ router.get('/stream/:id', async (req, res) => {
       thought_type: 'final_review'
     });
     
-    // Phase 2D: Generate final comprehensive report using APIM
+    // Phase 2D: Generate final comprehensive report
     let finalReport: string;
-    try {
-      finalReport = await generateReport({
-        query: run.query,
-        depth: run.depth as any,
-        fileFindings: uploadedFiles.length > 0 ? allFindings.filter(f => f.includes('From Uploaded Documents')) : undefined,
-        webFindings: allFindings.filter(f => !f.includes('From Uploaded Documents')),
-        sources
-      });
-    } catch (error: any) {
-      console.error('[Research] Report generation error:', error);
-      // Fallback report
+    
+    // If no findings, create simple report
+    if (allFindings.length === 0) {
       finalReport = `# Research Report
 
-## Executive Summary
+## Query
+"${run.query}"
 
-Research query: "${run.query}"
+## Status
+Research completed but no specific findings were returned. This may be due to:
+- OpenAI API configuration issues
+- Query requires more specific parameters
+- External search limitations
+
+## Recommendation
+Please try rephrasing your query or check API configuration.`;
+    } else {
+      // Try APIM synthesis with fallback
+      try {
+        finalReport = await generateReport({
+          query: run.query,
+          depth: run.depth as any,
+          fileFindings: uploadedFiles.length > 0 ? allFindings.filter(f => f.includes('From Uploaded Documents')) : undefined,
+          webFindings: allFindings.filter(f => !f.includes('From Uploaded Documents')),
+          sources
+        });
+      } catch (error: any) {
+        console.error('[Research] APIM report generation error:', error);
+        
+        // Create fallback report without APIM
+        finalReport = `# Research Report
+
+## Executive Summary
 
 ${execSummary}
 
@@ -430,13 +431,23 @@ ${execSummary}
 
 ${allFindings.map((f, i) => `${i + 1}. ${f}`).join('\n\n')}
 
+## Analysis
+
+The research covered ${allFindings.length} key findings from ${sources.length} sources related to: "${run.query}"
+
 ## Sources
 
 ${sources.map((s, i) => `${i + 1}. ${s}`).join('\n')}
 
+## Conclusion
+
+This ${run.depth}-depth research provides foundational information on the topic. Further analysis may be needed for specific aspects.
+
 ---
 
-*Note: Report generation encountered an issue. This is a preliminary summary of findings.*`;
+*Research completed at ${new Date().toISOString()}*  
+*Note: Advanced synthesis temporarily unavailable*`;
+      }
     }
     
     const duration = Math.round((Date.now() - startTime) / 1000);
