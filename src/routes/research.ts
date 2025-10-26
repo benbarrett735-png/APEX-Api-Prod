@@ -346,11 +346,11 @@ router.get('/stream/:id', async (req, res) => {
     const sources: string[] = [];
     
     // Parse uploaded files and chart requests
-    const uploadedFiles = Array.isArray(run.uploaded_files) 
+    const uploadedFiles: UploadedFile[] = Array.isArray(run.uploaded_files) 
       ? run.uploaded_files 
       : (run.uploaded_files ? JSON.parse(run.uploaded_files) : []);
     
-    const includeCharts = Array.isArray(run.include_charts)
+    const includeCharts: string[] = Array.isArray(run.include_charts)
       ? run.include_charts
       : (run.include_charts ? JSON.parse(run.include_charts) : []);
     
