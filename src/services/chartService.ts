@@ -1483,13 +1483,27 @@ REQUIREMENTS:
 
       stackedbar: `STACKEDBAR:
   keys: title?, x[string[]], series[{name, values[number[]]}], options?
-  options keys: width, height, dpi, grid(bool default true), label_rotation(int default 0), y_axis{min, max, tick_step, format}, colors[string[] default ["#3B82F6","#10B981","#F59E0B"]], bar_width(float default 0.75), legend(bool default false).
-  Note: Creates vertical stacked bars with blue base, green middle, amber top. All series values length must equal x length.`,
+  Required structure:
+  - x: Array of category labels
+  - series: Array of data series, each with name and values array
+  - Each series.values length must equal x length
+  Example: {x: ["Q1","Q2","Q3"], series: [{name:"A", values:[10,20,30]}, {name:"B", values:[15,25,35]}]}`,
+      
+      stackbar: `STACKBAR:
+  keys: title?, x[string[]], series[{name, values[number[]]}], options?
+  Required structure:
+  - x: Array of category labels
+  - series: Array of data series, each with name and values array
+  - Each series.values length must equal x length
+  Example: {x: ["Q1","Q2","Q3"], series: [{name:"A", values:[10,20,30]}, {name:"B", values:[15,25,35]}]}`,
 
       themeriver: `THEMERIVER:
   keys: title?, x[string[]], series[{name, values[number[]]}], options?
-  options keys: width, height, dpi, grid(bool default true), label_rotation(int default 0), baseline("wiggle"|"sym" default "wiggle"), colors[string[] default ["#BFDBFE","#60A5FA","#3B82F6"]], alpha(float default 0.88), y_axis{min, max, tick_step}.
-  Note: Creates flowing stacked areas with wiggle baseline for organic river look. Same data structure as stackedbar.`,
+  Required structure:
+  - x: Array of time periods or categories
+  - series: Array of data streams, each with name and values array
+  - Creates flowing river visualization with organic baseline
+  Example: {x: ["2020","2021","2022"], series: [{name:"Stream A", values:[100,150,200]}, {name:"Stream B", values:[80,120,160]}]}`,
 
       wordcloud: `WORDCLOUD:
   keys: title?, words[{text, weight, color?}], options?
