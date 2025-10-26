@@ -169,7 +169,7 @@ async function ensureUser(userId: string, email?: string, orgId?: string) {
 async function processResearch(
   runId: string,
   query: string,
-  files: string[],
+  files: string[] | UploadedFile[],
   depth: string
 ): Promise<void> {
   console.log(`[Research] Background processing started for ${runId}`);
