@@ -33,9 +33,6 @@ async function understandUserIntent(
   userGoal: string;
   keyTopics: string[];
   chartDataNeeds?: string[];
-  outputStyle?: string;
-  outputLength?: string;
-  specialInstructions?: string;
 }> {
   try {
     const messages = [
@@ -73,31 +70,47 @@ Respond with ONLY valid JSON:
 {
   "coreSubject": "The MAIN thing the user is asking about (be specific!)",
   "userGoal": "What they want to achieve with this research",
-  "keyTopics": ["Topic 1", "Topic 2", "Topic 3"...] // Specific topics to research
+  "keyTopics": ["Topic 1", "Topic 2", "Topic 3"...], // Specific topics to research
+  "outputStyle": "brief|standard|comprehensive|custom", // How detailed should the output be?
+  "outputLength": "1-2 paragraphs|3-5 sections|full report|as needed", // Expected length
+  "specialInstructions": "Any special formatting or focus areas" // Optional
   ${includeCharts && includeCharts.length > 0 ? ', "chartDataNeeds": ["Data type 1", "Data type 2"...] // What data is needed for the charts' : ''}
 }
 
-Example 1 - Cookery School:
-Query: "What are Cabot's market opportunities?"
-Document: "Cabot's Cookery School is a family-run sustainable cookery school..."
-
+Example 1 - Brief Request:
+Query: "Give me a quick summary of OpenAI"
 Response:
 {
-  "coreSubject": "Cabot's Cookery School (a cooking school business)",
-  "userGoal": "Identify market opportunities and growth strategies for the cookery school",
+  "coreSubject": "OpenAI (AI research company)",
+  "userGoal": "Get a concise overview of OpenAI",
+  "keyTopics": ["OpenAI mission", "Key products", "Recent news"],
+  "outputStyle": "brief",
+  "outputLength": "1-2 paragraphs",
+  "specialInstructions": "User wants quick summary, not deep analysis"
+}
+
+Example 2 - Comprehensive Analysis:
+Query: "Talk about Cabot's Cookery School, their market position, and what they should do"
+Document: "Cabot's Cookery School is a family-run sustainable cookery school..."
+Response:
+{
+  "coreSubject": "Cabot's Cookery School (cooking school business)",
+  "userGoal": "Comprehensive market analysis with strategic recommendations",
   "keyTopics": [
     "Cookery school market size and trends",
     "Competitors in culinary education",
-    "Customer segments for cooking classes",
-    "Marketing channels for cooking schools",
-    "Pricing strategies for culinary courses"
-  ]
+    "Customer segments and demographics",
+    "Marketing channels and positioning",
+    "Growth opportunities and threats"
+  ],
+  "outputStyle": "comprehensive",
+  "outputLength": "full report",
+  "specialInstructions": "User uploaded document and wants detailed multi-section analysis"
 }
 
-Example 2 - Tech Comparison with Charts:
-Query: "Compare React vs Vue"
+Example 3 - Tech Comparison with Charts:
+Query: "Compare React vs Vue with some charts"
 Charts: bar, line
-
 Response:
 {
   "coreSubject": "React and Vue JavaScript frameworks",
@@ -109,13 +122,22 @@ Response:
     "Ecosystem and community size",
     "Job market demand"
   ],
+  "outputStyle": "standard",
+  "outputLength": "3-5 sections",
+  "specialInstructions": "Include comparison sections and data visualizations",
   "chartDataNeeds": [
     "Market share statistics",
     "Performance benchmarks (load time, bundle size)",
     "GitHub stars/contributors over time",
     "Job posting counts by framework"
   ]
-}`
+}
+
+CRITICAL: Analyze the query carefully:
+- "quick" / "summary" / "briefly" → outputStyle: "brief", outputLength: "1-2 paragraphs"
+- "detailed" / "comprehensive" / "full" / "break down" → outputStyle: "comprehensive", outputLength: "full report"
+- "compare" / "analyze" / uploaded document → outputStyle: "standard" or "comprehensive"
+- No specific request → outputStyle: "standard", outputLength: "3-5 sections"`
       }
     ];
 
@@ -154,6 +176,20 @@ Response:
       
       console.log('[Understanding] Fallback extracted subject:', extractedSubject);
       
+      // Detect output style from query
+      const queryLower = query.toLowerCase();
+      let outputStyle = 'standard';
+      let outputLength = '3-5 sections';
+      
+      if (queryLower.includes('quick') || queryLower.includes('brief') || queryLower.includes('summary')) {
+        outputStyle = 'brief';
+        outputLength = '1-2 paragraphs';
+      } else if (queryLower.includes('detail') || queryLower.includes('comprehensive') || queryLower.includes('full') || 
+                 queryLower.includes('break down') || documentContext) {
+        outputStyle = 'comprehensive';
+        outputLength = 'full report';
+      }
+      
       return {
         coreSubject: extractedSubject,
         userGoal: `Research and analysis related to: ${extractedSubject}`,
@@ -162,7 +198,10 @@ Response:
           `${extractedSubject} market analysis`,
           `${extractedSubject} industry trends`,
           `${extractedSubject} competitive landscape`
-        ]
+        ],
+        outputStyle,
+        outputLength,
+        specialInstructions: documentContext ? 'User uploaded document, provide detailed analysis' : 'Standard research output'
       };
     }
 
@@ -199,6 +238,20 @@ Response:
     
     console.log('[Understanding] Error fallback extracted subject:', extractedSubject);
     
+    // Detect output style from query
+    const queryLower = query.toLowerCase();
+    let outputStyle = 'standard';
+    let outputLength = '3-5 sections';
+    
+    if (queryLower.includes('quick') || queryLower.includes('brief') || queryLower.includes('summary')) {
+      outputStyle = 'brief';
+      outputLength = '1-2 paragraphs';
+    } else if (queryLower.includes('detail') || queryLower.includes('comprehensive') || queryLower.includes('full') || 
+               queryLower.includes('break down') || documentContext) {
+      outputStyle = 'comprehensive';
+      outputLength = 'full report';
+    }
+    
     return {
       coreSubject: extractedSubject,
       userGoal: `Research and analysis related to: ${extractedSubject}`,
@@ -207,7 +260,10 @@ Response:
         `${extractedSubject} market analysis`,
         `${extractedSubject} industry trends`,
         `${extractedSubject} competitive landscape`
-      ]
+      ],
+      outputStyle,
+      outputLength,
+      specialInstructions: documentContext ? 'User uploaded document, provide detailed analysis' : 'Standard research output'
     };
   }
 }
@@ -224,7 +280,7 @@ async function createResearchPlan(
   includeCharts: string[],
   documentContext?: string, // NEW: Full document content
   chartRequests?: Array<{type: string; goal?: string}> // NEW: Chart goals
-): Promise<{ steps: string[]; reasoning: string; reportSections?: string[]; outputStyle?: string; outputLength?: string }> {
+): Promise<{ steps: string[]; reasoning: string; reportSections?: string[] }> {
   try {
     // Build COMPLETE context with ALL information
     let contextInfo = `UNDERSTANDING (what the user ACTUALLY wants):
@@ -259,19 +315,27 @@ For each chart, searches must target the DATA needed for that visualization!` : 
 CRITICAL PRINCIPLES:
 1. READ THE FULL DOCUMENT CONTENT CAREFULLY - understand what it says and what's missing
 2. Use the UNDERSTANDING to create searches about the CORE SUBJECT (not related words!)
-3. Make multiple specific searches (${depth === 'comprehensive' ? '4-6' : depth === 'long' ? '3-5' : depth === 'medium' ? '3-4' : '2-3'} searches) that:
+3. OUTPUT STYLE matters:
+   - brief: Short output, fewer steps, focused searches
+   - standard: Medium length, ${depth === 'medium' ? '3-4' : '2-3'} searches
+   - comprehensive: Long output, ${depth === 'comprehensive' ? '4-6' : depth === 'long' ? '3-5' : '3-4'} searches
+4. Make multiple specific searches that:
    - Find information NOT in the document
    - Provide external context, market data, comparisons
    - Target QUANTITATIVE data for charts
-4. For document analysis: Be SPECIFIC about what to extract (don't just say "analyze files")
-5. For charts: You MUST include "generate_chart: {type} - {what it shows}" steps
-6. For each chart, ensure searches gather the DATA needed for that specific visualization
-7. Report sections should reflect the document's content + external research
+5. For document analysis: Be SPECIFIC about what to extract (don't just say "analyze files")
+6. For charts: You MUST include "generate_chart: {type} - {what it shows}" steps
+7. For each chart, ensure searches gather the DATA needed for that specific visualization
+8. Report sections should reflect the document's content + external research + output style
 
 CHART HANDLING:
 - If user provided chart GOALS, use those goals in the generate_chart steps
 - Each chart step should be: "generate_chart: {type} - {goal or description}"
-- Searches BEFORE chart generation must target relevant data` 
+- Searches BEFORE chart generation must target relevant data
+
+OUTPUT STYLE DETECTED: ${understanding.outputStyle || 'standard'}
+OUTPUT LENGTH: ${understanding.outputLength || '3-5 sections'}
+SPECIAL INSTRUCTIONS: ${understanding.specialInstructions || 'None'}` 
       },
       { 
         role: 'user', 
@@ -284,28 +348,56 @@ Create a research plan with specific steps. Available actions:
 - "synthesize": Combine findings into coherent analysis
 - "generate_chart: {type}": Create a specific chart
 - "quality_check": Evaluate if we have enough information
-- "write_report": Generate final report with dynamic sections
+- "write_report: {style hint} - {what to include}": Generate final report (include outputStyle!)
 
 SEARCH QUERY RULES:
 - Be SPECIFIC (not "search about X" but "latest market data for X in 2024")
 - If document provided, search for things that COMPLEMENT it (external context, comparisons, recent updates)
-- Make 3-5 different searches for comprehensive depth
+- Adjust number of searches based on OUTPUT STYLE:
+  * brief: 1-2 focused searches
+  * standard: 2-4 searches
+  * comprehensive: 4-6 diverse searches
 - Each search should target different aspects
 
-REPORT SECTIONS (suggest dynamic sections based on query):
-- Don't always use "Executive Summary, Key Findings, Analysis"
-- Adapt sections to the query type
-- Examples: "Market Analysis", "Technical Comparison", "Historical Timeline", "Current State", "Future Outlook"
+REPORT GENERATION:
+The "write_report" step MUST include the output style and what to include:
+- FORMAT: "write_report: outputStyle={brief|standard|comprehensive}, length={expected}, sections=[...]"
+- BRIEF example: "write_report: outputStyle=brief, length=2 paragraphs, focus on key takeaways"
+- STANDARD example: "write_report: outputStyle=standard, length=3-5 sections, balanced analysis"
+- COMPREHENSIVE example: "write_report: outputStyle=comprehensive, length=full report, deep analysis with all findings"
+
+REPORT SECTIONS (suggest dynamic sections based on query + output style):
+- BRIEF: Usually NO sections, just 1-2 narrative paragraphs
+- STANDARD: 3-5 sections adapted to query type
+- COMPREHENSIVE: 5-8+ detailed sections
+- Adapt sections to the query type: "Market Analysis", "Technical Comparison", "Historical Timeline", etc.
 
 Respond with ONLY valid JSON:
 {
   "steps": ["step 1 with SPECIFIC details", "step 2...", ...],
   "reasoning": "why this plan makes sense",
-  "reportSections": ["Section 1", "Section 2", ...] // Dynamic sections for the report
+  "reportSections": ["Section 1", "Section 2", ...] or null if brief, // Dynamic sections
+  "outputStyle": "brief|standard|comprehensive", // From understanding
+  "outputLength": "expected length" // From understanding
 }
 
-Example 1 - Cookery School WITH document and charts:
-Understanding: Core Subject = "Cabot's Cookery School (cooking school business)"
+Example 1 - BRIEF request:
+Understanding: Core Subject = "OpenAI", outputStyle = "brief", outputLength = "1-2 paragraphs"
+Query: "Give me a quick summary of OpenAI"
+{
+  "steps": [
+    "search_web: OpenAI mission, key products (GPT, DALL-E), latest news 2024",
+    "synthesize: Combine into concise narrative",
+    "write_report: outputStyle=brief, length=2 paragraphs, focus on who they are and what they do"
+  ],
+  "reasoning": "User wants quick summary, not deep analysis. One focused search, minimal sections, brief narrative output.",
+  "reportSections": null,
+  "outputStyle": "brief",
+  "outputLength": "1-2 paragraphs"
+}
+
+Example 2 - COMPREHENSIVE with document and charts:
+Understanding: Core Subject = "Cabot's Cookery School", outputStyle = "comprehensive", outputLength = "full report"
 Document says: "12-acre organic farm, Kinlooey Lough location, expert chefs, 2025 promotional campaign"
 Charts requested: bar (Goal: "Compare market segments"), line (Goal: "Show tourism growth")
 {
@@ -319,14 +411,16 @@ Charts requested: bar (Goal: "Compare market segments"), line (Goal: "Show touri
     "synthesize: Combine Cabot's unique strengths with external market opportunities",
     "generate_chart: bar - Compare market segments (locals vs tourists vs groups) with size data from searches",
     "generate_chart: line - Show culinary tourism growth trend 2020-2024 from visitor statistics",
-    "write_report: Market positioning and growth strategies for Cabot's Cookery School"
+    "write_report: outputStyle=comprehensive, length=full report with 6-8 sections, deep market analysis with all findings"
   ],
-  "reasoning": "Document provides Cabot's unique assets and 2025 plans. Searches provide market context and quantitative data for the requested charts. Bar chart needs segment comparison data, line chart needs tourism growth numbers.",
-  "reportSections": ["Current Position (from document)", "Market Landscape", "Opportunities by Segment", "2025 Campaign Alignment", "Growth Projections"]
+  "reasoning": "User uploaded document and wants detailed analysis. Comprehensive depth requires 4-5 searches covering multiple angles, charts with data, and full multi-section report.",
+  "reportSections": ["Current Position (from document)", "Market Landscape", "Opportunities by Segment", "Competitive Analysis", "2025 Campaign Alignment", "Growth Projections"],
+  "outputStyle": "comprehensive",
+  "outputLength": "full report"
 }
 
-Example 2 - Tech with Charts:
-Understanding: Core Subject = "React vs Vue", Chart Data Needs = "Market share, Performance benchmarks"
+Example 3 - STANDARD Tech with Charts:
+Understanding: Core Subject = "React vs Vue", outputStyle = "standard", outputLength = "3-5 sections", Chart Data Needs = "Market share, Performance benchmarks"
 Charts requested: bar, line
 {
   "steps": [
@@ -338,10 +432,12 @@ Charts requested: bar, line
     "synthesize: Compare all metrics",
     "generate_chart: bar - Market share and adoption comparison",
     "generate_chart: line - Performance metrics comparison",
-    "write_report: Present comparison with data visualizations"
+    "write_report: outputStyle=standard, length=4-5 sections, balanced comparison with data visualizations"
   ],
-  "reasoning": "Comparison needs quantitative data for charts, multiple search angles for comprehensive view",
-  "reportSections": ["Overview", "Adoption Metrics", "Performance Analysis", "Developer Experience", "Recommendation"]
+  "reasoning": "Standard comparison needs quantitative data for charts, multiple search angles. Balanced multi-section output.",
+  "reportSections": ["Overview", "Adoption Metrics", "Performance Analysis", "Developer Experience", "Recommendation"],
+  "outputStyle": "standard",
+  "outputLength": "3-5 sections"
 }
 
 CRITICAL: If charts requested, you MUST include "generate_chart: {type}" steps!`

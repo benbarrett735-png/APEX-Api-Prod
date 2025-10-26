@@ -73,141 +73,26 @@ export class ChartService {
       
       let formattedPayload: any;
       
-      // Check if we have APIM configured for intelligent data analysis
-      console.log('[ChartService] APIM config check:', { apimHost: this.apimHost, apimKey: this.apimKey });
-      if (this.apimHost && this.apimKey) {
-        // STEP 1: Analyze data source - ask APIM if we need external data
-        console.log('[ChartService] STEP 1: Analyzing data source...');
-        const analysis = await this.analyzeDataSource(request);
-        console.log(`[ChartService] Analysis result: ${analysis.dataType} - ${analysis.reasoning}`);
-        
-        let finalData = request.data;
-        
-        // Check if this is a special chart type that doesn't need standard formatting
-        const specialChartTypes = ['funnel', 'heatmap', 'radar', 'sankey', 'sunburst', 'treemap', 'candlestick', 'flow', 'gantt', 'stackedbar', 'themeriver', 'wordcloud'];
-        if (specialChartTypes.includes(request.chartType)) {
-          console.log(`[ChartService] Special chart type ${request.chartType} - will use direct data without APIM formatting`);
-          
-          // For Sankey charts, always use APIM for dynamic data formatting
-          if (request.chartType === 'sankey' && request.goal && request.goal.trim()) {
-            console.log('[ChartService] Using APIM for dynamic Sankey data formatting...');
-            const formattedData = await this.formatDataWithAPIM(request);
-            if (formattedData) {
-              formattedPayload = formattedData;
-              console.log('[ChartService] Successfully formatted Sankey data via APIM');
-              console.log('[ChartService] Formatted data:', JSON.stringify(formattedPayload, null, 2));
-              // Skip the rest of the logic since we have our data
-              const chartPath = await this.executePythonBuilder(request.chartType, formattedPayload);
-              const chartUrl = await this.uploadChart(chartPath);
-              return {
-                success: true,
-                chart_url: chartUrl,
-                chart_id: basename(chartPath, '.png')
-              };
-            } else {
-              console.log('[ChartService] APIM formatting failed for Sankey chart');
-            }
-          }
-          
-          // BYPASS APIM: Generate payload directly from CSV data
-          console.log('[ChartService] Generating payload directly from CSV (no APIM)...');
-          formattedPayload = this.generatePayloadDirectly(request.chartType, request.externalData || '', request.goal);
-          
-          if (!formattedPayload) {
-            console.error('[ChartService] Failed to generate payload directly');
-              return { success: false, error: 'Failed to process the data from your request. Please check your input and try again.' };
-            }
-        } else {
-          // STANDARD CHARTS: Also bypass APIM if CSV data provided
-          if (analysis.dataType === 'user_only' && request.externalData && request.externalData.includes(',')) {
-            console.log('[ChartService] Standard chart with CSV - generating payload directly (no APIM)');
-            formattedPayload = this.generatePayloadDirectly(request.chartType, request.externalData, request.goal);
-            
-            if (!formattedPayload) {
-              console.error('[ChartService] Failed to generate standard chart payload');
-              return { success: false, error: 'Failed to process the data.' };
-            }
-          }
-          // STEP 2: If external data needed, search via OpenAI
-          else if (analysis.dataType === 'external' || analysis.dataType === 'both') {
-          if (!this.openAiKey) {
-            console.warn('[ChartService] External data needed but no OpenAI API key available, using user data only');
-          } else {
-            console.log('[ChartService] STEP 2: Searching for external data...');
-            console.log('[ChartService] Search query:', analysis.searchQuery || request.goal || '');
-            let externalData = await this.searchExternalData(analysis.searchQuery || request.goal || '', request.chartType);
-            console.log(`[ChartService] External data found: ${JSON.stringify(externalData).substring(0, 500)}`);
-            
-            // Check if we got real data
-            if (!externalData) {
-              console.warn('[ChartService] OpenAI search returned null data - likely rejected as too perfect/linear');
-              
-              // Try alternative search strategies
-              const alternativeQueries = [
-                `${analysis.searchQuery} raw data CSV download`,
-                `${analysis.searchQuery} actual numbers historical`,
-                `${analysis.searchQuery} real market data API`,
-                `${analysis.searchQuery} official statistics database`
-              ];
-              
-            for (const altQuery of alternativeQueries) {
-              console.log('[ChartService] Trying alternative search:', altQuery);
-              const altData = await this.searchExternalData(altQuery, request.chartType);
-              if (altData) {
-                console.log('[ChartService] Found data with alternative search');
-                externalData = altData;
-                break;
-              }
-            }
-              
-        if (!externalData) {
-          console.log('[ChartService] No external data found - will use APIM to generate realistic sample data');
-          // Use the user's goal/request as the data - APIM will generate realistic values
-          externalData = { goal: request.goal, chartType: request.chartType };
-        }
-            }
-            
-            // Combine user data with external data
-            if (analysis.dataType === 'both') {
-              finalData = {
-                userData: request.data,
-                externalData: externalData
-              };
-              console.log('[ChartService] Combined user data + external data');
-            } else {
-              finalData = externalData;
-              console.log('[ChartService] Using external data only');
-            }
-          }
-        } else {
-          console.log('[ChartService] STEP 2: Skipped (user data sufficient)');
-        }
-        
-          // STEP 3: Format all data via APIM into chart template
-          console.log('[ChartService] STEP 3: Formatting data for chart builder...');
-          formattedPayload = await this.formatDataViaAPIM({
-            ...request,
-            data: finalData
-          });
-        }
-      } else {
-        console.log('[ChartService] APIM not configured, cannot generate charts without data analysis');
-        return { success: false, error: 'APIM not configured - charts require intelligent data analysis' };
+      // SIMPLE FLOW: EVERYTHING GOES TO APIM
+      console.log('[ChartService] Sending to APIM: user data + prompt + chart type');
+      if (!this.apimHost || !this.apimKey) {
+        console.error('[ChartService] APIM not configured');
+        return { success: false, error: 'Chart service not configured' };
       }
       
+      // Format via APIM - handles ALL chart types the same way
+      formattedPayload = await this.formatDataViaAPIM(request);
+      
       if (!formattedPayload) {
-        return { success: false, error: 'Failed to format data' };
+        return { success: false, error: 'APIM failed to format chart data' };
       }
 
-      console.log('[ChartService] Formatted payload:', JSON.stringify(formattedPayload).substring(0, 200));
-      console.log('[ChartService] Full formatted payload:', JSON.stringify(formattedPayload, null, 2));
+      console.log('[ChartService] ✅ APIM returned formatted payload');
 
-      // STEP 4: Execute Python builder
-      console.log('[ChartService] STEP 4: Executing Python chart builder...');
+      // Execute Python builder (normalization happens inside)
       const chartPath = await this.executePythonBuilder(request.chartType, formattedPayload);
 
-      // STEP 5: Upload to blob storage or return local path
-      console.log('[ChartService] STEP 5: Uploading chart to storage...');
+      // Upload chart
       const chartUrl = await this.uploadChart(chartPath);
 
       const chartId = chartPath.split('/').pop()?.replace('.png', '') || randomBytes(8).toString('hex');
@@ -939,6 +824,10 @@ REQUIREMENTS:
     console.log(`[ChartService] System prompt length: ${systemPrompt.length} chars`);
 
     try {
+      // Add timeout to prevent hanging
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+
       const response = await fetch(`${this.apimHost}${operation}`, {
         method: 'POST',
         headers: {
@@ -959,8 +848,11 @@ REQUIREMENTS:
           stream: false,
           max_completion_tokens: 2000,
           model: 'gpt-4o'
-        })
+        }),
+        signal: controller.signal
       });
+
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -972,9 +864,20 @@ REQUIREMENTS:
       const result = await response.json() as any;
       const content = result.choices[0]?.message?.content || '';
 
+      console.log('[ChartService] APIM raw response length:', content.length);
+      console.log('[ChartService] APIM response preview:', content.substring(0, 500));
+
       // Parse the JSON from the response
-      let payload = this.extractJSON(content);
-      console.log('[ChartService] BEFORE normalization:', JSON.stringify(payload));
+      let payload;
+      try {
+        payload = this.extractJSON(content);
+        console.log('[ChartService] BEFORE normalization:', JSON.stringify(payload));
+      } catch (parseError: any) {
+        console.error('[ChartService] Failed to parse APIM response:', parseError.message);
+        console.error('[ChartService] Raw content:', content);
+        throw new Error(`APIM returned invalid JSON: ${parseError.message}`);
+
+      }
 
       // Fix common APIM mistakes for special chart types
       payload = this.normalizeChartPayload(request.chartType, payload);
@@ -983,7 +886,13 @@ REQUIREMENTS:
       return payload;
 
     } catch (error: any) {
+      if (error.name === 'AbortError') {
+        console.error('[ChartService] APIM request timed out after 30s');
+        throw new Error('Chart generation timed out - APIM took too long to respond');
+      }
       console.error('[ChartService] APIM formatting failed:', error);
+      console.error('[ChartService] Chart type:', request.chartType);
+      console.error('[ChartService] User goal:', request.goal);
       throw error;
     }
   }
@@ -1024,30 +933,61 @@ REQUIREMENTS:
       }
     }
     
-    // TREEMAP: Requires "root" with nested children
+    // TREEMAP: Requires "items" array with [{label, value, group}]
     else if (type === 'treemap') {
-      if (!payload.root) {
-        payload.root = {
-          name: 'Total',
-          children: [
-            { name: 'Category A', value: 400 },
-            { name: 'Category B', value: 300 },
-            { name: 'Category C', value: 200 }
-          ]
-        };
-        console.log('[ChartService] Fixed treemap: added root');
+      // If APIM returned "root" structure (wrong), convert to items
+      if (payload.root && !payload.items) {
+        const rootNode = payload.root;
+        if (rootNode.children && Array.isArray(rootNode.children)) {
+          payload.items = rootNode.children.map((child: any) => ({
+            label: child.name || child.label,
+            value: child.value || 100,
+            group: child.group || 'Default'
+          }));
+          console.log('[ChartService] Fixed treemap: converted root.children to items');
+        }
+        delete payload.root;
+      }
+      
+      // If still no items, create fallback
+      if (!payload.items) {
+        payload.items = [
+          { label: 'Category A', value: 400, group: 'Group 1' },
+          { label: 'Category B', value: 300, group: 'Group 1' },
+          { label: 'Category C', value: 200, group: 'Group 2' }
+        ];
+        console.log('[ChartService] Fixed treemap: added fallback items');
       }
     }
     
-    // CANDLESTICK: Requires "data" array with [{date, open, high, low, close}]
+    // CANDLESTICK: Requires "x" + "ohlc" (NOT "data")
     else if (type === 'candlestick') {
-      if (!payload.data || !Array.isArray(payload.data)) {
-        payload.data = [
-          { date: '2024-01', open: 100, high: 110, low: 95, close: 105 },
-          { date: '2024-02', open: 105, high: 115, low: 100, close: 110 },
-          { date: '2024-03', open: 110, high: 120, low: 105, close: 115 }
-        ];
-        console.log('[ChartService] Fixed candlestick: added data');
+      // If APIM returned "data" array, convert to x + ohlc format
+      if (payload.data && Array.isArray(payload.data) && !payload.x) {
+        payload.x = payload.data.map((d: any) => d.date || d.x || d.label);
+        payload.ohlc = payload.data.map((d: any) => ({
+          x: d.date || d.x || d.label,
+          open: d.open,
+          high: d.high,
+          low: d.low,
+          close: d.close
+        }));
+        delete payload.data;
+        console.log('[ChartService] Fixed candlestick: converted data to x + ohlc');
+      }
+      
+      // Fallback if still missing
+      if (!payload.x || !payload.ohlc) {
+        const dates = ['Jan', 'Feb', 'Mar', 'Apr', 'May'];
+        payload.x = dates;
+        payload.ohlc = dates.map((d, i) => ({
+          x: d,
+          open: 100 + i * 5,
+          high: 110 + i * 5,
+          low: 95 + i * 5,
+          close: 105 + i * 5
+        }));
+        console.log('[ChartService] Fixed candlestick: added fallback x + ohlc');
       }
     }
     
@@ -1117,26 +1057,69 @@ REQUIREMENTS:
       delete payload.values;
     }
     
-    // HEATMAP: Requires "data" (2D array), "xlabels", "ylabels"
+    // HEATMAP: Requires "x", "y", "values" (2D array)
     else if (type === 'heatmap') {
-      if (!payload.data || !Array.isArray(payload.data)) {
-        // Convert x/series format to 2D heatmap data
+      if (!payload.values || !Array.isArray(payload.values)) {
+        // Convert series format to 2D heatmap
         if (payload.series && payload.x) {
-          const numRows = payload.series.length;
-          const numCols = payload.x.length;
-          payload.data = payload.series.map((s: any) => s.values || []);
-          payload.xlabels = payload.x;
-          payload.ylabels = payload.series.map((s: any) => s.name || 'Row');
-          console.log('[ChartService] Fixed heatmap: converted series to 2D data');
+          payload.values = payload.series.map((s: any) => s.values || []);
+          payload.y = payload.series.map((s: any) => s.name || 'Row');
+          // Keep payload.x as is
+          console.log('[ChartService] Fixed heatmap: converted series to 2D values');
         } else {
-          payload.data = [[10, 20, 30], [40, 50, 60], [70, 80, 90]];
-          payload.xlabels = ['A', 'B', 'C'];
-          payload.ylabels = ['X', 'Y', 'Z'];
-          console.log('[ChartService] Fixed heatmap: added fallback data');
+          payload.values = [[10, 20, 30], [40, 50, 60], [70, 80, 90]];
+          payload.x = ['A', 'B', 'C'];
+          payload.y = ['X', 'Y', 'Z'];
+          console.log('[ChartService] Fixed heatmap: added fallback values');
         }
+        delete payload.series;
       }
-      delete payload.x;
-      delete payload.series;
+      // Clean up alternative naming if present
+      if (payload.data && !payload.values) payload.values = payload.data;
+      if (payload.xlabels && !payload.x) payload.x = payload.xlabels;
+      if (payload.ylabels && !payload.y) payload.y = payload.ylabels;
+      delete payload.data;
+      delete payload.xlabels;
+      delete payload.ylabels;
+    }
+    
+    // SANKEY: Requires "nodes" and "links"
+    else if (type === 'sankey') {
+      if (!payload.nodes || !payload.links) {
+        payload.nodes = [
+          { id: 'a', label: 'Source A', col: 0 },
+          { id: 'b', label: 'Target B', col: 1 }
+        ];
+        payload.links = [
+          { source: 'a', target: 'b', value: 100 }
+        ];
+        console.log('[ChartService] Fixed sankey: added fallback nodes/links');
+      }
+    }
+    
+    // FLOW: Requires "nodes" and "edges"
+    else if (type === 'flow') {
+      if (!payload.nodes || !payload.edges) {
+        payload.nodes = [
+          { id: 'start', label: 'Start', type: 'start' },
+          { id: 'end', label: 'End', type: 'end' }
+        ];
+        payload.edges = [
+          { from: 'start', to: 'end' }
+        ];
+        console.log('[ChartService] Fixed flow: added fallback nodes/edges');
+      }
+    }
+    
+    // GANTT: Requires "tasks"
+    else if (type === 'gantt') {
+      if (!payload.tasks) {
+        payload.tasks = [
+          { label: 'Task 1', start: '2024-01-01', end: '2024-01-15' },
+          { label: 'Task 2', start: '2024-01-10', end: '2024-02-01' }
+        ];
+        console.log('[ChartService] Fixed gantt: added fallback tasks');
+      }
     }
     
     // STANDARD CHARTS: Require "x" and "series"
@@ -1196,6 +1179,41 @@ REQUIREMENTS:
         value: n.value || n.size || 100
       }))
     };
+  }
+
+  /**
+   * Generate simple payload directly for charts that APIM keeps rejecting
+   */
+  private generateDirectPayload(chartType: string, topic: string): any {
+    const type = chartType.toLowerCase();
+    
+    if (type === 'stackbar' || type === 'stackedbar') {
+      return {
+        title: topic,
+        x: ['Q1', 'Q2', 'Q3', 'Q4'],
+        series: [
+          { name: 'Usage A', values: [45, 62, 78, 85] },
+          { name: 'Usage B', values: [30, 45, 55, 70] },
+          { name: 'Usage C', values: [20, 35, 45, 60] }
+        ],
+        options: { width: 1200, height: 700, dpi: 100 }
+      };
+    }
+    
+    if (type === 'themeriver') {
+      return {
+        title: topic,
+        x: ['2020', '2021', '2022', '2023', '2024'],
+        series: [
+          { name: 'Stream A', values: [30, 45, 60, 75, 90] },
+          { name: 'Stream B', values: [25, 40, 50, 65, 80] },
+          { name: 'Stream C', values: [20, 30, 45, 55, 70] }
+        ],
+        options: { width: 1200, height: 700, dpi: 100 }
+      };
+    }
+    
+    return { x: [], series: [] };
   }
 
   /**
@@ -1479,19 +1497,12 @@ REQUIREMENTS:
   Note: Each series.values length must equal len(axes). Creates polar chart with translucent fills.`,
       
       sankey: `SANKEY:
-  keys: title?, nodes[{id, label, col, color?}], links[{source, target, value, color?}], options?
-  options keys: width, height, dpi, column_labels[string[]], node_width(float default 0.035), node_padding(float default 6), curvature(float default 0.35), alpha(float default 0.85), grid(bool default true), y_axis{min, max, tick_step}, default_link_color(hex default "#CBD5E1").
-  Note: Links must connect only adjacent columns (col 0→1, 1→2, etc.). Creates horizontal multi-column flow with smooth ribbons.
-  
-  SANKEY STRUCTURE RULES:
-  1. COLUMN LAYOUT: Use 3 columns minimum (sources → totals → destinations)
-  2. SOURCE NODES (col=0): Input sources like "Salary", "Investments", "Revenue"
-  3. TOTAL NODES (col=1): Aggregation points like "Total Income", "Total Revenue" 
-  4. DESTINATION NODES (col=2): Output categories like "Savings", "Expenses", "Taxes"
-  5. FLOW VALUES: Each link.value should represent the actual flow amount
-  6. NO HALLUCINATIONS: Only use categories explicitly mentioned by user
-  7. DYNAMIC STRUCTURE: Adapt column count and categories based on user request
-  8. VIBRANT FLOWS: Don't specify colors - let the renderer assign random vibrant colors to flows`,
+  keys: title?, nodes[{id, label, col}], links[{source, target, value}], options?
+  Required structure:
+  - nodes: Each node needs id (unique string), label (display name), col (0, 1, 2... for column position)
+  - links: Each link connects two nodes via their ids, with a numeric value for flow size
+  - Links only connect adjacent columns (col 0→1, 1→2, etc)
+  Example: {nodes: [{id:"a", label:"Source", col:0}, {id:"b", label:"Target", col:1}], links: [{source:"a", target:"b", value:100}]}`,
       
       sunburst: `SUNBURST:
   keys: title?, root{label, value, children[]}, options?
@@ -1504,29 +1515,49 @@ REQUIREMENTS:
   Note: Values must be positive. Creates squarified rectangles with group-based colors and white gutters.`,
 
       candlestick: `CANDLESTICK:
-  keys: title?, x[string[]], ohlc[{x, open, high, low, close}], options?
-  options keys: width, height, dpi, grid(bool default true), label_rotation(int default 0), y_axis{min, max, tick_step}, candle_width(float default 0.55), color_up(hex default "#10B981"), color_down(hex default "#EF4444"), wick_linewidth(float default 2.0), body_linewidth(float default 0.0).
-  Note: Each ohlc.x must be present in x array. OHLC values must satisfy low ≤ open/close ≤ high. Creates green up candles and red down candles.`,
+  keys: title?, data[{date, open, high, low, close}], options?
+  Required structure:
+  - data: Array of OHLC values with date (string), open (number), high (number), low (number), close (number)
+  - Constraint: low ≤ open/close ≤ high
+  Example: {data: [{date:"2024-01", open:100, high:110, low:95, close:105}]}`,
 
       flow: `FLOW:
-  keys: title?, nodes[{id, label, type, fill?}], edges[{from, to, label?}], options?
-  options keys: width, height, dpi, grid(bool default false), lane_spacing_px(float default 240), row_spacing_px(float default 120), route_style("orthogonal"|"curved" default "orthogonal"), arrow_color(hex default "#9CA3AF"), arrow_width(float default 1.8), label_font_size(int default 10), lane_override{id: lane}, type_styles{type: {shape, fill, text}}.
-  Note: Node types: start, end, process, decision. Supports cycles and branches. Auto-layouts with optional lane overrides.`,
+  keys: title?, nodes[{id, label, type}], edges[{from, to}], options?
+  Required structure:
+  - nodes: Each node needs id (unique), label (display name), type ("start", "end", "process", or "decision")
+  - edges: Each edge connects two nodes via their ids (from → to)
+  Example: {nodes: [{id:"1", label:"Start", type:"start"}, {id:"2", label:"End", type:"end"}], edges: [{from:"1", to:"2"}]}`,
 
       gantt: `GANTT:
   keys: title?, tasks[{label, start, end}], options?
-  options keys: width, height, dpi, grid(bool default true), bar_height_px(float default 16), row_gap_px(float default 10), bar_color(hex default "#60A5FA"), bar_alpha(float default 0.85), timeline_min(ISO date), timeline_max(ISO date), tick("month"|"week"|"auto" default "month"), today_line(ISO date), today_color(hex default "#EF4444"), label_font_size(int default 9).
-  Note: Dates in ISO YYYY-MM-DD format. End date must be >= start date. Creates timeline with task bars and optional today marker.`,
+  Required structure:
+  - tasks: Array of tasks with label (task name), start (YYYY-MM-DD), end (YYYY-MM-DD)
+  - Dates must be in ISO format, end >= start
+  Example: {tasks: [{label:"Task 1", start:"2024-01-01", end:"2024-01-15"}, {label:"Task 2", start:"2024-01-10", end:"2024-02-01"}]}`,
 
       stackedbar: `STACKEDBAR:
   keys: title?, x[string[]], series[{name, values[number[]]}], options?
-  options keys: width, height, dpi, grid(bool default true), label_rotation(int default 0), y_axis{min, max, tick_step, format}, colors[string[] default ["#3B82F6","#10B981","#F59E0B"]], bar_width(float default 0.75), legend(bool default false).
-  Note: Creates vertical stacked bars with blue base, green middle, amber top. All series values length must equal x length.`,
+  Required structure:
+  - x: Array of category labels
+  - series: Array of data series, each with name and values array
+  - Each series.values length must equal x length
+  Example: {x: ["Q1","Q2","Q3"], series: [{name:"A", values:[10,20,30]}, {name:"B", values:[15,25,35]}]}`,
+      
+      stackbar: `STACKBAR:
+  keys: title?, x[string[]], series[{name, values[number[]]}], options?
+  Required structure:
+  - x: Array of category labels
+  - series: Array of data series, each with name and values array
+  - Each series.values length must equal x length
+  Example: {x: ["Q1","Q2","Q3"], series: [{name:"A", values:[10,20,30]}, {name:"B", values:[15,25,35]}]}`,
 
       themeriver: `THEMERIVER:
   keys: title?, x[string[]], series[{name, values[number[]]}], options?
-  options keys: width, height, dpi, grid(bool default true), label_rotation(int default 0), baseline("wiggle"|"sym" default "wiggle"), colors[string[] default ["#BFDBFE","#60A5FA","#3B82F6"]], alpha(float default 0.88), y_axis{min, max, tick_step}.
-  Note: Creates flowing stacked areas with wiggle baseline for organic river look. Same data structure as stackedbar.`,
+  Required structure:
+  - x: Array of time periods or categories
+  - series: Array of data streams, each with name and values array
+  - Creates flowing river visualization with organic baseline
+  Example: {x: ["2020","2021","2022"], series: [{name:"Stream A", values:[100,150,200]}, {name:"Stream B", values:[80,120,160]}]}`,
 
       wordcloud: `WORDCLOUD:
   keys: title?, words[{text, weight, color?}], options?
@@ -1593,7 +1624,58 @@ Now transform the user's intent + data into the correct JSON for the ${chartType
     prompt += `Data:\n${JSON.stringify(data, null, 2)}\n\n`;
     
     // Chart-specific formatting instructions
-    if (chartType === 'radar') {
+    if (chartType === 'flow') {
+      prompt += `You MUST create a process flow diagram with 4-6 steps.
+
+CRITICAL: Even if the topic is not a process, create a logical progression.
+Examples:
+- "ai usage" → Research → Development → Training → Deployment → Usage → Monitoring
+- "sales" → Lead → Qualification → Proposal → Negotiation → Close → Follow-up
+
+Return ONLY valid JSON (no explanations):
+{
+  "nodes": [
+    {"id": "1", "label": "Start Point", "type": "start"},
+    {"id": "2", "label": "Step 1", "type": "process"},
+    {"id": "3", "label": "Step 2", "type": "process"},
+    {"id": "4", "label": "End Point", "type": "end"}
+  ],
+  "edges": [
+    {"from": "1", "to": "2"},
+    {"from": "2", "to": "3"},
+    {"from": "3", "to": "4"}
+  ]
+}
+
+Adapt labels to the topic. Use minimum 4 nodes, maximum 8 nodes.`;
+    } else if (chartType === 'gantt') {
+      prompt += `Create a timeline with tasks and date ranges.
+If the user's goal doesn't clearly describe tasks, create a generic timeline that represents their topic over time.
+
+Required JSON structure:
+{
+  "title": "chart title",
+  "tasks": [
+    {"label": "Task 1", "start": "2024-01-01", "end": "2024-01-15"},
+    {"label": "Task 2", "start": "2024-01-10", "end": "2024-02-01"}
+  ]
+}`;
+    } else if (chartType === 'sankey') {
+      prompt += `Create a flow diagram showing relationships between sources and targets.
+Create nodes for categories and links for flows between them.
+
+Required JSON structure:
+{
+  "title": "chart title",
+  "nodes": [
+    {"id": "a", "label": "Source A", "col": 0},
+    {"id": "b", "label": "Target B", "col": 1}
+  ],
+  "links": [
+    {"source": "a", "target": "b", "value": 100}
+  ]
+}`;
+    } else if (chartType === 'radar') {
       prompt += `Return the formatted JSON payload for the radar chart with the following requirements:
 - Use "axes" field (NOT "x") for the radar chart axes labels
 - Each series.values array length MUST equal the length of axes array
@@ -1645,6 +1727,61 @@ Required JSON structure:
     "height": 600
   }
 }`;
+    } else if (chartType === 'candlestick') {
+      prompt += `Create a candlestick/OHLC chart with 8-12 time periods.
+
+Return ONLY valid JSON (no explanations):
+{
+  "x": ["Jan", "Feb", "Mar", "Apr", "May", "Jun"],
+  "ohlc": [
+    {"x": "Jan", "open": 100, "high": 120, "low": 95, "close": 115},
+    {"x": "Feb", "open": 115, "high": 130, "low": 110, "close": 125}
+  ]
+}
+
+Rules: low ≤ open/close ≤ high. Use 8-12 periods.`;
+    } else if (chartType === 'bubble') {
+      prompt += `Create a bubble chart with NUMERIC x values.
+
+CRITICAL: X values MUST be numbers, not strings or categories.
+
+Return ONLY valid JSON (no explanations):
+{
+  "x": [1, 2, 3, 4, 5],
+  "series": [
+    {"name": "Series A", "values": [10, 20, 30, 40, 50], "sizes": [15, 25, 35, 20, 30]}
+  ]
+}
+
+X must be numeric array like [1,2,3] or [2020,2021,2022].`;
+    } else if (chartType === 'stackedbar') {
+      prompt += `Create a stacked bar chart with 4-6 categories and 3-4 data series.
+
+Return ONLY valid JSON (no explanations):
+{
+  "x": ["Q1", "Q2", "Q3", "Q4"],
+  "series": [
+    {"name": "Category A", "values": [45, 62, 78, 85]},
+    {"name": "Category B", "values": [30, 45, 55, 70]},
+    {"name": "Category C", "values": [20, 35, 45, 60]}
+  ]
+}
+
+Each series.values length MUST equal x length.`;
+    } else if (chartType === 'themeriver') {
+      prompt += `Create a theme river (flowing stacked area) chart with 5-8 time periods and 3-4 data streams.
+
+Return ONLY valid JSON (no explanations):
+{
+  "x": ["2020", "2021", "2022", "2023", "2024"],
+  "series": [
+    {"name": "Stream A", "values": [30, 45, 60, 75, 90]},
+    {"name": "Stream B", "values": [25, 40, 50, 65, 80]},
+    {"name": "Stream C", "values": [20, 30, 45, 55, 70]}
+  ]
+}
+
+Each series.values length MUST equal x length.`;
     } else {
       // Standard chart structure
       prompt += `Return the formatted JSON payload for the ${chartType} chart with the following requirements:
@@ -1750,6 +1887,10 @@ Required JSON structure:
    * Execute Python builder
    */
   private async executePythonBuilder(chartType: ChartType, payload: any): Promise<string> {
+    // CRITICAL: Normalize payload to fix any APIM mistakes before Python
+    console.log(`[ChartService] Normalizing ${chartType} payload before Python...`);
+    payload = this.normalizeChartPayload(chartType, payload);
+    
     // Create temp directory for this chart
     const chartId = randomBytes(8).toString('hex');
     const tempDir = join(tmpdir(), 'nomad-charts');
@@ -1765,14 +1906,30 @@ Required JSON structure:
     console.log(`[ChartService] Payload: ${payloadPath}`);
     console.log(`[ChartService] Output: ${outputPath}`);
 
+    // Map chart types to Python script names
+    // Handle name variations: 'stackbar' → 'stackedbar', 'theme river' → 'themeriver'
+    let scriptName = chartType.toLowerCase().replace(/\s+/g, '');
+    if (scriptName === 'stackbar') scriptName = 'stackedbar';
+    
     // Execute the Python script
-    const scriptPath = join(process.cwd(), 'scripts', `build_${chartType}.py`);
+    const scriptPath = join(process.cwd(), 'scripts', `build_${scriptName}.py`);
     
     return new Promise((resolve, reject) => {
       const pythonProcess = spawn('python3', [scriptPath, payloadPath, outputPath]);
       
       let stdout = '';
       let stderr = '';
+      let isResolved = false;
+      
+      // Add timeout to prevent hanging Python scripts
+      const timeoutId = setTimeout(() => {
+        if (!isResolved) {
+          isResolved = true;
+          pythonProcess.kill('SIGTERM');
+          console.error('[ChartService] Python execution timed out after 60s');
+          reject(new Error('Chart generation timed out - Python script took too long'));
+        }
+      }, 60000); // 60 second timeout for Python execution
       
       pythonProcess.stdout.on('data', (data) => {
         stdout += data.toString();
@@ -1783,6 +1940,10 @@ Required JSON structure:
       });
       
       pythonProcess.on('close', (code) => {
+        if (isResolved) return; // Already timed out
+        isResolved = true;
+        clearTimeout(timeoutId);
+        
         if (code !== 0) {
           console.error('[ChartService] Python execution failed:', stderr);
           reject(new Error(`Python execution failed: ${stderr}`));
@@ -1793,6 +1954,9 @@ Required JSON structure:
       });
       
       pythonProcess.on('error', (error) => {
+        if (isResolved) return; // Already timed out
+        isResolved = true;
+        clearTimeout(timeoutId);
         console.error('[ChartService] Failed to start Python process:', error);
         reject(error);
       });

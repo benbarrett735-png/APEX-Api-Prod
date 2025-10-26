@@ -15,6 +15,8 @@ interface ReportContext {
   webFindings?: string[];
   sources?: string[];
   reportSections?: string[]; // NEW: Dynamic sections from plan
+  outputStyle?: 'brief' | 'standard' | 'comprehensive'; // NEW: Output format hint
+  outputLength?: string; // NEW: Expected length hint
 }
 
 /**
@@ -94,20 +96,52 @@ export async function generateReport(context: ReportContext): Promise<string> {
 
   const combinedFindings = sections.join('\n\n');
 
-  // Determine word count target based on depth
-  const wordTargets = {
-    short: '300-500 words',
-    medium: '500-800 words',
-    long: '800-1200 words',
-    comprehensive: '1200-2000 words'
-  };
-
-  const wordTarget = wordTargets[context.depth] || '500-800 words';
+  // Determine output style and word target
+  const outputStyle = context.outputStyle || 'standard';
+  const outputLength = context.outputLength;
+  
+  let wordTarget = '';
+  let formatInstructions = '';
+  
+  if (outputStyle === 'brief') {
+    wordTarget = outputLength || '150-300 words (2 concise paragraphs)';
+    formatInstructions = `FORMAT: BRIEF (NO sections!)
+- Write 2 concise, narrative paragraphs (NO markdown headers!)
+- First paragraph: Quick overview and key point
+- Second paragraph: Main takeaway or recommendation
+- Total: ${wordTarget}
+- NO bullet lists, NO sections, NO "Executive Summary" header
+- Just clear, concise prose`;
+  } else if (outputStyle === 'comprehensive') {
+    wordTarget = outputLength || '1500-2500 words (detailed analysis)';
+    formatInstructions = `FORMAT: COMPREHENSIVE
+- Detailed multi-section report with ${wordTarget}
+- Include all findings with supporting data
+- Deep analysis and context for each point
+- Comprehensive recommendations`;
+  } else {
+    // standard
+    const depthMap = {
+      short: '300-500 words',
+      medium: '500-800 words',
+      long: '800-1200 words',
+      comprehensive: '1200-2000 words'
+    };
+    wordTarget = outputLength || depthMap[context.depth] || '500-800 words';
+    formatInstructions = `FORMAT: STANDARD
+- Balanced multi-section report with ${wordTarget}
+- Clear structure with appropriate depth
+- Key findings with supporting data
+- Actionable recommendations`;
+  }
 
   // Build dynamic section structure
   let sectionStructure = '';
   
-  if (context.reportSections && context.reportSections.length > 0) {
+  if (outputStyle === 'brief') {
+    // NO sections for brief
+    sectionStructure = `NO SECTIONS. Write 2 narrative paragraphs.`;
+  } else if (context.reportSections && context.reportSections.length > 0) {
     // Use DYNAMIC sections from the plan
     console.log('[Report Generator] Using dynamic sections from plan:', context.reportSections);
     sectionStructure = `Structure (ADAPT to the content):\n`;
@@ -134,22 +168,25 @@ export async function generateReport(context: ReportContext): Promise<string> {
 (Brief summary and next steps)`;
   }
   
-  if (context.sources && context.sources.length > 0) {
+  if (outputStyle !== 'brief' && context.sources && context.sources.length > 0) {
     sectionStructure += `\n\n## Sources\n(List of ${context.sources.length} sources referenced)`;
   }
   
   // Create APIM prompt
-  const systemPrompt = `You are a professional research analyst creating a comprehensive research report.
+  const systemPrompt = `You are a professional research analyst creating a research report.
+
+OUTPUT STYLE: ${outputStyle.toUpperCase()}
+${formatInstructions}
 
 CRITICAL REQUIREMENTS:
-- Write in clear, professional markdown format
-- Use proper headings (## for main sections)
+- Write in clear, professional markdown format${outputStyle === 'brief' ? ' (but NO section headers!)' : ''}
+- ${outputStyle === 'brief' ? 'NO headings' : 'Use proper headings (## for main sections)'}
 - Include specific data points and findings
 - Be factual and well-structured
 - Target length: ${wordTarget}
 - NO placeholder text or generic statements
 - ONLY include information from the provided findings
-- Adapt content to fit the requested sections naturally
+- ${outputStyle === 'brief' ? 'Write as flowing paragraphs, NOT structured sections' : 'Adapt content to fit the requested sections naturally'}
 
 ${sectionStructure}`;
 
@@ -157,7 +194,7 @@ ${sectionStructure}`;
 
 ${combinedFindings}
 
-Create a comprehensive research report based ONLY on the findings above. Be specific, include data points, and provide actionable insights.`;
+Create a ${outputStyle} research report based ONLY on the findings above. ${outputStyle === 'brief' ? 'Write 2 concise paragraphs with key takeaways.' : 'Be specific, include data points, and provide actionable insights.'}`;
 
   try {
     const report = await callAPIM([
