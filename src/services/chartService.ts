@@ -25,7 +25,6 @@ interface ChartRequest {
   chartType: ChartType;
   title?: string;
   goal?: string;
-  externalData?: string;
 }
 
 interface ChartResult {
@@ -74,141 +73,26 @@ export class ChartService {
       
       let formattedPayload: any;
       
-      // Check if we have APIM configured for intelligent data analysis
-      console.log('[ChartService] APIM config check:', { apimHost: this.apimHost, apimKey: this.apimKey });
-      if (this.apimHost && this.apimKey) {
-        // STEP 1: Analyze data source - ask APIM if we need external data
-        console.log('[ChartService] STEP 1: Analyzing data source...');
-        const analysis = await this.analyzeDataSource(request);
-        console.log(`[ChartService] Analysis result: ${analysis.dataType} - ${analysis.reasoning}`);
-        
-        let finalData = request.data;
-        
-        // Check if this is a special chart type that doesn't need standard formatting
-        const specialChartTypes = ['funnel', 'heatmap', 'radar', 'sankey', 'sunburst', 'treemap', 'candlestick', 'flow', 'gantt', 'stackedbar', 'themeriver', 'wordcloud'];
-        if (specialChartTypes.includes(request.chartType)) {
-          console.log(`[ChartService] Special chart type ${request.chartType} - will use direct data without APIM formatting`);
-          
-          // For Sankey charts, always use APIM for dynamic data formatting
-          if (request.chartType === 'sankey' && request.goal && request.goal.trim()) {
-            console.log('[ChartService] Using APIM for dynamic Sankey data formatting...');
-            const formattedData = await this.formatDataWithAPIM(request);
-            if (formattedData) {
-              formattedPayload = formattedData;
-              console.log('[ChartService] Successfully formatted Sankey data via APIM');
-              console.log('[ChartService] Formatted data:', JSON.stringify(formattedPayload, null, 2));
-              // Skip the rest of the logic since we have our data
-              const chartPath = await this.executePythonBuilder(request.chartType, formattedPayload);
-              const chartUrl = await this.uploadChart(chartPath);
-              return {
-                success: true,
-                chart_url: chartUrl,
-                chart_id: basename(chartPath, '.png')
-              };
-            } else {
-              console.log('[ChartService] APIM formatting failed for Sankey chart');
-            }
-          }
-          
-          // BYPASS APIM: Generate payload directly from CSV data
-          console.log('[ChartService] Generating payload directly from CSV (no APIM)...');
-          formattedPayload = this.generatePayloadDirectly(request.chartType, request.externalData || '', request.goal || '');
-          
-          if (!formattedPayload) {
-            console.error('[ChartService] Failed to generate payload directly');
-              return { success: false, error: 'Failed to process the data from your request. Please check your input and try again.' };
-            }
-        } else {
-          // STANDARD CHARTS: Also bypass APIM if CSV data provided
-          if (analysis.dataType === 'user_only' && request.externalData && request.externalData.includes(',')) {
-            console.log('[ChartService] Standard chart with CSV - generating payload directly (no APIM)');
-            formattedPayload = this.generatePayloadDirectly(request.chartType, request.externalData, request.goal || '');
-            
-            if (!formattedPayload) {
-              console.error('[ChartService] Failed to generate standard chart payload');
-              return { success: false, error: 'Failed to process the data.' };
-            }
-          }
-          // STEP 2: If external data needed, search via OpenAI
-          else if (analysis.dataType === 'external' || analysis.dataType === 'both') {
-          if (!this.openAiKey) {
-            console.warn('[ChartService] External data needed but no OpenAI API key available, using user data only');
-          } else {
-            console.log('[ChartService] STEP 2: Searching for external data...');
-            console.log('[ChartService] Search query:', analysis.searchQuery || request.goal || '');
-            let externalData = await this.searchExternalData(analysis.searchQuery || request.goal || '', request.chartType);
-            console.log(`[ChartService] External data found: ${JSON.stringify(externalData).substring(0, 500)}`);
-            
-            // Check if we got real data
-            if (!externalData) {
-              console.warn('[ChartService] OpenAI search returned null data - likely rejected as too perfect/linear');
-              
-              // Try alternative search strategies
-              const alternativeQueries = [
-                `${analysis.searchQuery} raw data CSV download`,
-                `${analysis.searchQuery} actual numbers historical`,
-                `${analysis.searchQuery} real market data API`,
-                `${analysis.searchQuery} official statistics database`
-              ];
-              
-            for (const altQuery of alternativeQueries) {
-              console.log('[ChartService] Trying alternative search:', altQuery);
-              const altData = await this.searchExternalData(altQuery, request.chartType);
-              if (altData) {
-                console.log('[ChartService] Found data with alternative search');
-                externalData = altData;
-                break;
-              }
-            }
-              
-        if (!externalData) {
-          console.log('[ChartService] No external data found - will use APIM to generate realistic sample data');
-          // Use the user's goal/request as the data - APIM will generate realistic values
-          externalData = { goal: request.goal, chartType: request.chartType };
-        }
-            }
-            
-            // Combine user data with external data
-            if (analysis.dataType === 'both') {
-              finalData = {
-                userData: request.data,
-                externalData: externalData
-              };
-              console.log('[ChartService] Combined user data + external data');
-            } else {
-              finalData = externalData;
-              console.log('[ChartService] Using external data only');
-            }
-          }
-        } else {
-          console.log('[ChartService] STEP 2: Skipped (user data sufficient)');
-        }
-        
-          // STEP 3: Format all data via APIM into chart template
-          console.log('[ChartService] STEP 3: Formatting data for chart builder...');
-          formattedPayload = await this.formatDataViaAPIM({
-            ...request,
-            data: finalData
-          });
-        }
-      } else {
-        console.log('[ChartService] APIM not configured, cannot generate charts without data analysis');
-        return { success: false, error: 'APIM not configured - charts require intelligent data analysis' };
+      // SIMPLE FLOW: EVERYTHING GOES TO APIM
+      console.log('[ChartService] Sending to APIM: user data + prompt + chart type');
+      if (!this.apimHost || !this.apimKey) {
+        console.error('[ChartService] APIM not configured');
+        return { success: false, error: 'Chart service not configured' };
       }
       
+      // Format via APIM - handles ALL chart types the same way
+      formattedPayload = await this.formatDataViaAPIM(request);
+      
       if (!formattedPayload) {
-        return { success: false, error: 'Failed to format data' };
+        return { success: false, error: 'APIM failed to format chart data' };
       }
 
-      console.log('[ChartService] Formatted payload:', JSON.stringify(formattedPayload).substring(0, 200));
-      console.log('[ChartService] Full formatted payload:', JSON.stringify(formattedPayload, null, 2));
+      console.log('[ChartService] ✅ APIM returned formatted payload');
 
-      // STEP 4: Execute Python builder
-      console.log('[ChartService] STEP 4: Executing Python chart builder...');
+      // Execute Python builder (normalization happens inside)
       const chartPath = await this.executePythonBuilder(request.chartType, formattedPayload);
 
-      // STEP 5: Upload to blob storage or return local path
-      console.log('[ChartService] STEP 5: Uploading chart to storage...');
+      // Upload chart
       const chartUrl = await this.uploadChart(chartPath);
 
       const chartId = chartPath.split('/').pop()?.replace('.png', '') || randomBytes(8).toString('hex');
@@ -839,20 +723,12 @@ For gantt charts:
 CRITICAL: ALWAYS return dataFound: true and provide usable data. Never return false.`;
 
     try {
-      // FIX: Add timeout to prevent 30+ second waits on external search
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
-      
-      console.log('[ChartService] Starting external data search with 15s timeout...');
-      const startTime = Date.now();
-      
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${this.openAiKey}`
         },
-        signal: controller.signal,
         body: JSON.stringify({
           model: 'gpt-5',
           messages: [
@@ -880,10 +756,6 @@ REQUIREMENTS:
           max_completion_tokens: 2000
         })
       });
-      
-      clearTimeout(timeoutId);
-      const elapsedTime = Date.now() - startTime;
-      console.log(`[ChartService] External search completed in ${elapsedTime}ms`);
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -934,15 +806,8 @@ REQUIREMENTS:
       }
 
     } catch (error: any) {
-      // Handle timeout gracefully
-      if (error.name === 'AbortError') {
-        console.warn('[ChartService] External data search timed out after 15s - using fallback sample data');
-        return null; // Will trigger fallback to sample data
-      }
-      
       console.error('[ChartService] External data search failed:', error);
-      // Don't throw - return null to fallback to sample data
-      return null;
+      throw error;
     }
   }
 
@@ -1610,17 +1475,7 @@ Now transform the user's intent + data into the correct JSON for the ${chartType
       prompt += `Title: ${title}\n\n`;
     }
     
-    // FIX: Truncate large data to prevent APIM 500 errors
-    const dataString = JSON.stringify(data, null, 2);
-    const MAX_DATA_LENGTH = 5000; // Limit data to 5KB to prevent prompt explosion
-    
-    if (dataString.length > MAX_DATA_LENGTH) {
-      console.log(`[ChartService] Data too large (${dataString.length} chars), truncating to ${MAX_DATA_LENGTH} chars`);
-      const truncated = dataString.substring(0, MAX_DATA_LENGTH);
-      prompt += `Data (truncated due to size):\n${truncated}\n... [truncated ${dataString.length - MAX_DATA_LENGTH} more characters]\n\nNote: Large dataset - use representative sample for chart visualization.\n\n`;
-    } else {
-      prompt += `Data:\n${dataString}\n\n`;
-    }
+    prompt += `Data:\n${JSON.stringify(data, null, 2)}\n\n`;
     
     // Chart-specific formatting instructions
     if (chartType === 'radar') {
@@ -1780,11 +1635,9 @@ Required JSON structure:
    * Execute Python builder
    */
   private async executePythonBuilder(chartType: ChartType, payload: any): Promise<string> {
-    // CRITICAL: Normalize payload REGARDLESS of which path it came from
-    // This fixes ALL chart types that might have wrong data structures from APIM or direct generation
-    console.log(`[ChartService] BEFORE final normalization (${chartType}):`, JSON.stringify(payload).substring(0, 300));
+    // CRITICAL: Normalize payload to fix any APIM mistakes before Python
+    console.log(`[ChartService] Normalizing ${chartType} payload before Python...`);
     payload = this.normalizeChartPayload(chartType, payload);
-    console.log(`[ChartService] AFTER final normalization (${chartType}):`, JSON.stringify(payload).substring(0, 300));
     
     // Create temp directory for this chart
     const chartId = randomBytes(8).toString('hex');
