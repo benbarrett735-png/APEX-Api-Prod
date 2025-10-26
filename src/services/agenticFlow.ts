@@ -840,6 +840,15 @@ export class AgenticFlow {
         });
       }
       
+      // Step N-1: Assemble charts into viewable report
+      plan.push({
+        id: `step-${String(stepId++).padStart(3, '0')}`,
+        rationale: "Assemble all charts into displayable report",
+        action: { name: "assemble_report", args: { goal } },
+        expects: ["Charts assembled into viewable report"],
+        depends_on: []
+      });
+      
       // Final step: Done
       plan.push({
         id: `step-${String(stepId++).padStart(3, '0')}`,
@@ -2086,14 +2095,16 @@ Write the ${section_name} section now in markdown format with ## heading:`
       fullReport += `---\n\n`;
     }
 
-    // Add report metadata
+    // Add report metadata (skip for charts mode - cleaner output)
     const successfulCharts = chartData.filter(c => !c.failed).length;
     const failedCharts = chartData.filter(c => c.failed).length;
     
-    fullReport += `\n## Report Summary\n\n`;
-    fullReport += `- **Sections:** ${sectionContents.length}\n`;
-    fullReport += `- **Visualizations:** ${successfulCharts} successful${failedCharts > 0 ? `, ${failedCharts} failed` : ''}\n`;
-    fullReport += `- **Total Words:** ${totalWordCount.toLocaleString()}\n\n`;
+    if (this.mode !== 'charts') {
+      fullReport += `\n## Report Summary\n\n`;
+      fullReport += `- **Sections:** ${sectionContents.length}\n`;
+      fullReport += `- **Visualizations:** ${successfulCharts} successful${failedCharts > 0 ? `, ${failedCharts} failed` : ''}\n`;
+      fullReport += `- **Total Words:** ${totalWordCount.toLocaleString()}\n\n`;
+    }
 
     const report = {
       title: reportTitle,
@@ -2611,6 +2622,9 @@ Write the ${section_name} section now in markdown format with ## heading:`
   }
 
   static async getRunStatus(runId: string): Promise<any> {
+    console.log(`[GetRunStatus] ========== FETCHING RUN STATUS ==========`);
+    console.log(`[GetRunStatus] Run ID: ${runId}`);
+    
     const runResult = await dbQuery(
       `SELECT * FROM agentic_runs WHERE run_id = $1`,
       [runId]
@@ -2635,11 +2649,61 @@ Write the ${section_name} section now in markdown format with ## heading:`
       [runId]
     );
 
+    const run = runResult.rows[0];
+    console.log(`[GetRunStatus] Run status: ${run?.status}`);
+    console.log(`[GetRunStatus] Found ${artifactsResult.rows.length} artifacts`);
+    
+    // If run is complete, extract report content from artifacts
+    let reportContent = null;
+    if (run && (run.status === 'completed' || run.status === 'failed')) {
+      console.log(`[GetRunStatus] Looking for report artifact...`);
+      
+      // Log all artifact keys for debugging
+      artifactsResult.rows.forEach((a: any, idx: number) => {
+        console.log(`[GetRunStatus] Artifact ${idx + 1}: ${a.artifact_key} (type: ${a.type})`);
+      });
+      
+      const reportArtifact = artifactsResult.rows.find((a: any) => 
+        a.artifact_key && a.artifact_key.includes('assemble_report')
+      );
+      
+      if (reportArtifact) {
+        console.log(`[GetRunStatus] ✅ Found report artifact: ${reportArtifact.artifact_key}`);
+        console.log(`[GetRunStatus] Report artifact meta type:`, typeof reportArtifact.meta);
+        
+        const meta = typeof reportArtifact.meta === 'string' 
+          ? JSON.parse(reportArtifact.meta) 
+          : reportArtifact.meta;
+        
+        console.log(`[GetRunStatus] Meta keys:`, Object.keys(meta));
+        
+        if (meta.report) {
+          console.log(`[GetRunStatus] Report object keys:`, Object.keys(meta.report));
+          if (meta.report.full_content) {
+            reportContent = meta.report.full_content;
+            console.log(`[GetRunStatus] ✅ Extracted report content: ${reportContent.length} chars`);
+            console.log(`[GetRunStatus] Report preview (first 200 chars):`, reportContent.substring(0, 200));
+          } else {
+            console.warn(`[GetRunStatus] ⚠️  Report object found but no full_content field`);
+          }
+        } else {
+          console.warn(`[GetRunStatus] ⚠️  Artifact meta has no report field`);
+        }
+      } else {
+        console.warn(`[GetRunStatus] ⚠️  No report artifact found`);
+      }
+    }
+    
+    console.log(`[GetRunStatus] Returning with report_content: ${reportContent ? `${reportContent.length} chars` : 'NULL'}`);
+    console.log(`[GetRunStatus] ========== RUN STATUS FETCH COMPLETE ==========`);
+
     return {
-      run: runResult.rows[0],
+      run: run,
+      status: run?.status,
       steps: stepsResult.rows,
       artifacts: artifactsResult.rows,
-      events: eventsResult.rows
+      events: eventsResult.rows,
+      report_content: reportContent  // Add report content for frontend
     };
   }
 }

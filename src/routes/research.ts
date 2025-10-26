@@ -11,6 +11,7 @@ import { requireAuth } from '../middleware/requireAuth.js';
 import { searchWeb, isOpenAIConfigured } from '../services/openaiSearch.js';
 import { getMultipleFiles, combineFileContents } from '../services/fileRetrieval.js';
 import { generateReport, generateSectionSummary } from '../services/reportGenerator.js';
+import { ChartService } from '../services/chartService.js';
 
 const router = Router();
 
@@ -273,10 +274,14 @@ router.get('/stream/:id', async (req, res) => {
     const allFindings: string[] = [];
     const sources: string[] = [];
     
-    // Parse uploaded files first
+    // Parse uploaded files and chart requests
     const uploadedFiles = Array.isArray(run.uploaded_files) 
       ? run.uploaded_files 
       : (run.uploaded_files ? JSON.parse(run.uploaded_files) : []);
+    
+    const includeCharts = Array.isArray(run.include_charts)
+      ? run.include_charts
+      : (run.include_charts ? JSON.parse(run.include_charts) : []);
     
     // Initial analysis - determine research strategy
     emit('thinking', {
@@ -298,11 +303,12 @@ router.get('/stream/:id', async (req, res) => {
     else if (run.depth === 'medium') estimatedSteps = 7;
     else estimatedSteps = 5;
     
-    // Adjust based on query type
+    // Adjust based on query type and features
     if (hasComparison) estimatedSteps += 2;
     if (hasTimeline) estimatedSteps += 2;
     if (hasAnalysis) estimatedSteps += 1;
     if (uploadedFiles.length > 0) estimatedSteps += 2;
+    if (includeCharts.length > 0) estimatedSteps += includeCharts.length; // Each chart adds a step
     
     emit('thinking', {
       thought: `Query type: ${hasComparison ? 'Comparative analysis' : hasTimeline ? 'Historical research' : hasAnalysis ? 'Deep analysis' : 'Informational research'}. Planning ${estimatedSteps} research steps.`,
@@ -417,7 +423,71 @@ router.get('/stream/:id', async (req, res) => {
       thought_type: 'final_review'
     });
     
-    // Phase 2D: Generate final comprehensive report
+    // Phase 2D: Generate charts (if requested)
+    const chartUrls: Record<string, string> = {};
+    
+    if (includeCharts.length > 0 && allFindings.length > 0) {
+      emit('thinking', {
+        thought: `Generating ${includeCharts.length} chart${includeCharts.length > 1 ? 's' : ''} to visualize research findings...`,
+        thought_type: 'synthesis'
+      });
+      
+      const chartService = new ChartService();
+      
+      for (const chartType of includeCharts) {
+        try {
+          emit('tool.call', {
+            tool: 'chart_generator',
+            purpose: `Generate ${chartType} chart from research data`
+          });
+          
+          // Extract chart-worthy data from findings
+          const chartData = {
+            data: allFindings.join('\n'),
+            chartType: chartType as any,
+            title: `${run.query} - ${chartType} visualization`,
+            goal: `Create a ${chartType} chart that visualizes the key insights from this research: "${run.query}". Extract relevant data points, categories, and values from the findings.`
+          };
+          
+          console.log(`[Research] Generating ${chartType} chart...`);
+          const chartResult = await chartService.generateChart(chartData);
+          
+          if (chartResult.success && chartResult.chart_url) {
+            chartUrls[chartType] = chartResult.chart_url;
+            console.log(`[Research] ${chartType} chart generated: ${chartResult.chart_url}`);
+            
+            emit('tool.result', {
+              tool: 'chart_generator',
+              findings_count: 1,
+              key_insights: `${chartType} chart generated successfully`
+            });
+          } else {
+            console.warn(`[Research] ${chartType} chart generation failed:`, chartResult.error);
+            emit('tool.result', {
+              tool: 'chart_generator',
+              findings_count: 0,
+              key_insights: `${chartType} chart generation failed`
+            });
+          }
+  } catch (error: any) {
+          console.error(`[Research] Error generating ${chartType} chart:`, error);
+          emit('tool.result', {
+            tool: 'chart_generator',
+            findings_count: 0,
+            key_insights: `Error: ${error.message}`
+          });
+        }
+      }
+      
+      if (Object.keys(chartUrls).length > 0) {
+        emit('thinking', {
+          thought: `Successfully generated ${Object.keys(chartUrls).length} chart${Object.keys(chartUrls).length > 1 ? 's' : ''}. Including in final report.`,
+          thought_type: 'synthesis'
+        });
+      }
+    }
+    
+    // Phase 2E: Generate final comprehensive report
     let finalReport: string;
     
     // If no findings, create simple report
@@ -476,6 +546,14 @@ This ${run.depth}-depth research provides foundational information on the topic.
 *Research completed at ${new Date().toISOString()}*  
 *Note: Advanced synthesis temporarily unavailable*`;
       }
+      
+      // Append charts to report if generated
+      if (Object.keys(chartUrls).length > 0) {
+        finalReport += `\n\n## Visualizations\n\n`;
+        for (const [chartType, chartUrl] of Object.entries(chartUrls)) {
+          finalReport += `### ${chartType.charAt(0).toUpperCase() + chartType.slice(1)} Chart\n\n![${chartType} visualization](${chartUrl})\n\n`;
+        }
+      }
     }
     
     const duration = Math.round((Date.now() - startTime) / 1000);
@@ -487,10 +565,12 @@ This ${run.depth}-depth research provides foundational information on the topic.
       metadata: {
         word_count: finalReport.split(/\s+/).length,
         duration_seconds: duration,
-        phase: 2, // Phase 2: Real research
+        phase: 2, // Phase 2: Real research with charts
         files_analyzed: uploadedFiles.length,
         web_sources: sources.length,
         findings_count: allFindings.length,
+        charts_generated: Object.keys(chartUrls).length,
+        chart_types: Object.keys(chartUrls),
         depth: run.depth
       }
     });
@@ -536,11 +616,11 @@ router.get('/status/:id', async (req, res) => {
   try {
     const runId = req.params.id;
     const userId = req.auth?.sub as string;
-    
+
     if (!userId) {
       return res.status(401).json({ error: 'User ID not found in token' });
     }
-    
+
     const result = await dbQuery(
       `SELECT id, status, query, depth, report_content, metadata, created_at, updated_at
        FROM o1_research_runs

@@ -6,8 +6,45 @@
 import { Router } from 'express';
 import { AgenticFlow } from '../services/agenticFlow.js';
 import { query as dbQuery } from '../db/query.js';
+import { requireAuth } from '../middleware/requireAuth.js';
 
 const router = Router();
+
+// Apply auth middleware to all routes
+router.use(requireAuth);
+
+/**
+ * Helper: Ensure user and org exist (per Kevin's plan - extract from JWT)
+ */
+async function ensureUser(userId: string, email?: string, orgId?: string) {
+  try {
+    const defaultOrgId = orgId || '00000000-0000-0000-0000-000000000001';
+    const orgCheck = await dbQuery('SELECT id FROM orgs WHERE id = $1', [defaultOrgId]);
+    
+    if (orgCheck.rows.length === 0) {
+      await dbQuery(
+        `INSERT INTO orgs (id, name, created_at)
+         VALUES ($1, $2, NOW())
+         ON CONFLICT (id) DO NOTHING`,
+        [defaultOrgId, 'Default Organization']
+      );
+    }
+    
+    const userCheck = await dbQuery('SELECT id FROM users WHERE id = $1', [userId]);
+    
+    if (userCheck.rows.length === 0) {
+      await dbQuery(
+        `INSERT INTO users (id, org_id, email, role, external_sub, created_at)
+         VALUES ($1, $2, $3, $4, $5, NOW())
+         ON CONFLICT (id) DO NOTHING`,
+        [userId, defaultOrgId, email || `${userId}@cognito.local`, 'member', userId]
+      );
+    }
+  } catch (error) {
+    console.error('[AgenticFlow] Error ensuring user:', error);
+    throw error;
+  }
+}
 
 // ============================================================================
 // Run Management
@@ -19,7 +56,17 @@ const router = Router();
 router.post('/runs', async (req, res) => {
   try {
     const { goal, mode, completion_criteria, reportLength, reportFocus, selectedCharts, fileContext } = req.body;
-    const userId = req.headers['x-user-id'] as string || '00000000-0000-0000-0000-000000000002';
+    
+    // Extract user from validated JWT (per Kevin's plan)
+    const userId = req.auth?.sub as string;
+    const email = req.auth?.email as string;
+    
+    if (!userId) {
+      return res.status(401).json({ error: 'User ID not found in token' });
+    }
+    
+    // Ensure user exists in database
+    await ensureUser(userId, email);
     
     console.log(`[POST /runs] Request received:`);
     console.log(`  - Goal: ${goal}`);
@@ -349,7 +396,7 @@ router.get('/runs/:runId/stream', async (req, res) => {
               console.log(`[Streaming] ========== REPORT RETRIEVAL COMPLETE ==========`);
             }
             
-            console.log(`[Streaming] ========== SENDING run.complete EVENT ==========`);
+            console.log(`[Streaming] ========== SENDING research.complete EVENT ==========`);
             console.log(`[Streaming] Status: ${status}`);
             console.log(`[Streaming] Report content: ${reportContent ? `${reportContent.length} chars` : 'null/empty'}`);
             if (reportContent) {
@@ -357,7 +404,7 @@ router.get('/runs/:runId/stream', async (req, res) => {
             }
             console.log(`[Streaming] ========== SENDING EVENT NOW ==========`);
             
-            sendEvent('run.complete', { status, reportContent });
+            sendEvent('research.complete', { status, researchContent: reportContent });
             clearInterval(pollInterval);
             res.end();
           }

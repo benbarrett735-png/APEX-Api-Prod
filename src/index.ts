@@ -5,6 +5,8 @@ import helmet from "helmet";
 import chatNormalRouter from "./routes/chatNormal.js";
 import adiRouter from "./routes/adi.js";
 import agenticFlowRouter from "./routes/agentic-flow.js";
+import researchRouter from "./routes/research.js";
+import chartsRouter from "./routes/charts.js";
 
 const app = express();
 
@@ -13,7 +15,7 @@ app.use(cors({
   origin: CORS_ORIGIN,
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "x-correlation-id"]
+  allowedHeaders: ["Content-Type", "Authorization", "x-correlation-id", "x-org-id", "x-user-id"]
 }));
 
 app.use(helmet());
@@ -30,6 +32,12 @@ app.use("/adi", adiRouter);
 
 // ✅ Agentic flow routes
 app.use("/agentic-flow", agenticFlowRouter);
+
+// ✅ Research routes (bridges to agentic flow)
+app.use("/research", researchRouter);
+
+// ✅ Charts routes (serves generated chart images)
+app.use("/charts", chartsRouter);
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`API on ${PORT}`));
