@@ -1876,8 +1876,12 @@ Required JSON structure:
     console.log(`[ChartService] Payload: ${payloadPath}`);
     console.log(`[ChartService] Output: ${outputPath}`);
 
+    // Map chart types to Python script names
+    // Note: TypeScript type is 'stackedbar' and 'themeriver' but need to handle variations
+    let scriptName = chartType.toLowerCase().replace(/\s+/g, '');
+    
     // Execute the Python script
-    const scriptPath = join(process.cwd(), 'scripts', `build_${chartType}.py`);
+    const scriptPath = join(process.cwd(), 'scripts', `build_${scriptName}.py`);
     
     return new Promise((resolve, reject) => {
       const pythonProcess = spawn('python3', [scriptPath, payloadPath, outputPath]);
