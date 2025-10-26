@@ -80,15 +80,8 @@ export class ChartService {
         return { success: false, error: 'Chart service not configured' };
       }
       
-      // CRITICAL: STACKEDBAR and THEMERIVER keep getting APIM 500 errors
-      // Generate directly to avoid APIM issues
-      if (request.chartType === 'stackedbar' || request.chartType === 'themeriver') {
-        console.log(`[ChartService] Generating ${request.chartType} directly (APIM bypass for reliability)`);
-        formattedPayload = this.generateDirectPayload(request.chartType, request.goal || 'Chart Data');
-      } else {
-        // Format via APIM - handles ALL other chart types
-        formattedPayload = await this.formatDataViaAPIM(request);
-      }
+      // Format via APIM - handles ALL chart types the same way
+      formattedPayload = await this.formatDataViaAPIM(request);
       
       if (!formattedPayload) {
         return { success: false, error: 'APIM failed to format chart data' };
@@ -1731,6 +1724,34 @@ Return ONLY valid JSON (no explanations):
 }
 
 Rules: low ≤ open ≤ high, low ≤ close ≤ high. Use 8-12 periods minimum.`;
+    } else if (chartType === 'stackedbar') {
+      prompt += `Create a stacked bar chart with 4-6 categories and 3-4 data series.
+
+Return ONLY valid JSON (no explanations):
+{
+  "x": ["Q1", "Q2", "Q3", "Q4"],
+  "series": [
+    {"name": "Category A", "values": [45, 62, 78, 85]},
+    {"name": "Category B", "values": [30, 45, 55, 70]},
+    {"name": "Category C", "values": [20, 35, 45, 60]}
+  ]
+}
+
+Each series.values length MUST equal x length.`;
+    } else if (chartType === 'themeriver') {
+      prompt += `Create a theme river (flowing stacked area) chart with 5-8 time periods and 3-4 data streams.
+
+Return ONLY valid JSON (no explanations):
+{
+  "x": ["2020", "2021", "2022", "2023", "2024"],
+  "series": [
+    {"name": "Stream A", "values": [30, 45, 60, 75, 90]},
+    {"name": "Stream B", "values": [25, 40, 50, 65, 80]},
+    {"name": "Stream C", "values": [20, 30, 45, 55, 70]}
+  ]
+}
+
+Each series.values length MUST equal x length.`;
     } else {
       // Standard chart structure
       prompt += `Return the formatted JSON payload for the ${chartType} chart with the following requirements:
