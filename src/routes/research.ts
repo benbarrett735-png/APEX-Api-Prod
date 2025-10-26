@@ -127,17 +127,39 @@ Response:
       let extractedSubject = query;
       if (documentContext) {
         // Try to extract business/organization name from document
-        const lines = documentContext.split('\n').filter(l => l.trim().length > 0);
-        const firstLine = lines[0] || '';
-        if (firstLine.length > 0 && firstLine.length < 100) {
-          extractedSubject = firstLine.replace(/[#*]/g, '').trim();
+        // Look for "Key Subject:" line first
+        const keySubjectMatch = documentContext.match(/Key Subject:\s*([^\n]+)/);
+        if (keySubjectMatch && keySubjectMatch[1].trim().length > 5) {
+          extractedSubject = keySubjectMatch[1].trim();
+        } else {
+          // Fall back to finding substantial content lines
+          const lines = documentContext.split('\n').filter(l => l.trim().length > 0);
+          for (const line of lines) {
+            const cleaned = line.replace(/[#*\[\]]/g, '').trim();
+            // Skip lines that are obviously not subjects
+            if (cleaned.length > 15 && cleaned.length < 150 && 
+                !cleaned.toLowerCase().includes('document:') &&
+                !cleaned.toLowerCase().includes('.pdf') &&
+                !cleaned.toLowerCase().includes('.doc') &&
+                !cleaned.startsWith('---')) {
+              extractedSubject = cleaned;
+              break;
+            }
+          }
         }
       }
+      
+      console.log('[Understanding] Fallback extracted subject:', extractedSubject);
       
       return {
         coreSubject: extractedSubject,
         userGoal: `Research and analysis related to: ${extractedSubject}`,
-        keyTopics: [extractedSubject, `${extractedSubject} market analysis`, `${extractedSubject} opportunities`]
+        keyTopics: [
+          extractedSubject,
+          `${extractedSubject} market analysis`,
+          `${extractedSubject} industry trends`,
+          `${extractedSubject} competitive landscape`
+        ]
       };
     }
 
@@ -152,17 +174,37 @@ Response:
     // Better fallback using document
     let extractedSubject = query;
     if (documentContext) {
-      const lines = documentContext.split('\n').filter(l => l.trim().length > 0);
-      const firstLine = lines[0] || '';
-      if (firstLine.length > 0 && firstLine.length < 100) {
-        extractedSubject = firstLine.replace(/[#*]/g, '').trim();
+      // Look for "Key Subject:" line first
+      const keySubjectMatch = documentContext.match(/Key Subject:\s*([^\n]+)/);
+      if (keySubjectMatch && keySubjectMatch[1].trim().length > 5) {
+        extractedSubject = keySubjectMatch[1].trim();
+      } else {
+        const lines = documentContext.split('\n').filter(l => l.trim().length > 0);
+        for (const line of lines) {
+          const cleaned = line.replace(/[#*\[\]]/g, '').trim();
+          if (cleaned.length > 15 && cleaned.length < 150 && 
+              !cleaned.toLowerCase().includes('document:') &&
+              !cleaned.toLowerCase().includes('.pdf') &&
+              !cleaned.toLowerCase().includes('.doc') &&
+              !cleaned.startsWith('---')) {
+            extractedSubject = cleaned;
+            break;
+          }
+        }
       }
     }
+    
+    console.log('[Understanding] Error fallback extracted subject:', extractedSubject);
     
     return {
       coreSubject: extractedSubject,
       userGoal: `Research and analysis related to: ${extractedSubject}`,
-      keyTopics: [extractedSubject, `${extractedSubject} market analysis`, `${extractedSubject} opportunities`]
+      keyTopics: [
+        extractedSubject,
+        `${extractedSubject} market analysis`,
+        `${extractedSubject} industry trends`,
+        `${extractedSubject} competitive landscape`
+      ]
     };
   }
 }
@@ -311,33 +353,72 @@ CRITICAL: If charts requested, you MUST include "generate_chart: {type}" steps!`
       console.warn('[Plan Creation] Could not parse APIM response, using intelligent fallback');
       console.warn('[Plan Creation] APIM response was:', response.substring(0, 500));
       
-      // Create intelligent fallback using the UNDERSTANDING
+      // Create SMART fallback using document + query context
       const subject = understanding.coreSubject || query;
       const topics = understanding.keyTopics || [subject];
       
-      const fallbackSteps: string[] = [];
-      if (hasFiles) fallbackSteps.push(`analyze_files: Extract key information about ${subject}`);
+      // Analyze query intent
+      const queryLower = query.toLowerCase();
+      const wantsMarket = queryLower.includes('market') || queryLower.includes('position') || queryLower.includes('competitive');
+      const wantsOpportunities = queryLower.includes('opportunit') || queryLower.includes('growth') || queryLower.includes('expand');
+      const wantsStrategy = queryLower.includes('strategy') || queryLower.includes('recommend') || queryLower.includes('plan');
       
-      // Create specific searches based on topics
-      topics.slice(0, 3).forEach((topic: string) => {
-        fallbackSteps.push(`search_web: ${topic} trends, market data, and recent developments`);
+      const fallbackSteps: string[] = [];
+      
+      // Document analysis
+      if (hasFiles) {
+        fallbackSteps.push(`analyze_files: Extract ${subject}'s key assets, offerings, unique features, and current strategy`);
+      }
+      
+      // Create RELEVANT searches based on subject + query intent
+      const searches: string[] = [];
+      
+      // Always search for market context about the SUBJECT
+      searches.push(`${subject} market size, industry trends, and customer demographics 2024`);
+      
+      // Add intent-specific searches
+      if (wantsMarket || wantsOpportunities) {
+        searches.push(`${subject} competitors, market positioning, and competitive landscape`);
+        searches.push(`${subject} growth opportunities and emerging market trends`);
+      }
+      
+      if (wantsStrategy || wantsOpportunities) {
+        searches.push(`Successful strategies for businesses like ${subject}`);
+      }
+      
+      // If no specific intent, add general business searches
+      if (!wantsMarket && !wantsOpportunities && !wantsStrategy) {
+        searches.push(`${subject} industry analysis and best practices`);
+      }
+      
+      // Add searches (limit to 3-4)
+      searches.slice(0, depth === 'comprehensive' ? 4 : 3).forEach(search => {
+        fallbackSteps.push(`search_web: ${search}`);
       });
       
+      // Quality check
+      fallbackSteps.push('quality_check: Verify we have comprehensive information from document and external sources');
+      
+      // Charts if requested
       if (includeCharts.length > 0) {
+        fallbackSteps.push('synthesize: Combine findings to prepare for visualizations');
         includeCharts.forEach(chartType => {
           fallbackSteps.push(`generate_chart: ${chartType} - Visualize key data about ${subject}`);
         });
+      } else {
+        fallbackSteps.push('synthesize: Combine document insights with market research');
       }
       
-      fallbackSteps.push('synthesize: Combine all findings');
-      fallbackSteps.push('write_report: Create comprehensive report');
+      fallbackSteps.push('write_report: Create comprehensive analysis report');
+      
+      console.log('[Plan Creation] Fallback plan with smart searches:', fallbackSteps);
       
       return {
         steps: fallbackSteps,
-        reasoning: `Intelligent fallback plan for ${subject} research`,
+        reasoning: `Smart fallback: analyzing ${subject} with focus on ${wantsMarket ? 'market position' : wantsOpportunities ? 'opportunities' : wantsStrategy ? 'strategy' : 'comprehensive analysis'}`,
         reportSections: hasFiles 
-          ? ['Current Position', 'Market Analysis', 'Opportunities', 'Recommendations']
-          : ['Overview', 'Market Analysis', 'Key Insights', 'Recommendations']
+          ? ['Current Position', 'Market Analysis', 'Opportunities', 'Strategic Recommendations']
+          : ['Overview', 'Industry Analysis', 'Key Insights', 'Recommendations']
       };
     }
     
@@ -351,32 +432,64 @@ CRITICAL: If charts requested, you MUST include "generate_chart: {type}" steps!`
     console.error('[Plan Creation] Error:', error);
     console.error('[Plan Creation] Error details:', error.message);
     
-    // Intelligent fallback using the UNDERSTANDING
+    // SMART fallback using document + query context
     const subject = understanding.coreSubject || query;
-    const topics = understanding.keyTopics || [subject];
+    
+    // Analyze query intent
+    const queryLower = query.toLowerCase();
+    const wantsMarket = queryLower.includes('market') || queryLower.includes('position') || queryLower.includes('competitive');
+    const wantsOpportunities = queryLower.includes('opportunit') || queryLower.includes('growth') || queryLower.includes('expand');
+    const wantsStrategy = queryLower.includes('strategy') || queryLower.includes('recommend') || queryLower.includes('plan');
     
     const fallbackSteps: string[] = [];
-    if (hasFiles) fallbackSteps.push(`analyze_files: Extract key information about ${subject}`);
     
-    topics.slice(0, 3).forEach((topic: string) => {
-      fallbackSteps.push(`search_web: ${topic} trends, market data, and recent developments`);
+    // Document analysis
+    if (hasFiles) {
+      fallbackSteps.push(`analyze_files: Extract ${subject}'s key assets, offerings, unique features, and current strategy`);
+    }
+    
+    // Create RELEVANT searches
+    const searches: string[] = [];
+    searches.push(`${subject} market size, industry trends, and customer demographics 2024`);
+    
+    if (wantsMarket || wantsOpportunities) {
+      searches.push(`${subject} competitors, market positioning, and competitive landscape`);
+      searches.push(`${subject} growth opportunities and emerging market trends`);
+    }
+    
+    if (wantsStrategy || wantsOpportunities) {
+      searches.push(`Successful strategies for businesses like ${subject}`);
+    }
+    
+    if (!wantsMarket && !wantsOpportunities && !wantsStrategy) {
+      searches.push(`${subject} industry analysis and best practices`);
+    }
+    
+    searches.slice(0, depth === 'comprehensive' ? 4 : 3).forEach(search => {
+      fallbackSteps.push(`search_web: ${search}`);
     });
     
+    fallbackSteps.push('quality_check: Verify comprehensive information');
+    
     if (includeCharts.length > 0) {
+      fallbackSteps.push('synthesize: Prepare for visualizations');
       includeCharts.forEach(chartType => {
         fallbackSteps.push(`generate_chart: ${chartType} - Visualize key data about ${subject}`);
       });
+    } else {
+      fallbackSteps.push('synthesize: Combine document insights with market research');
     }
     
-    fallbackSteps.push('synthesize: Combine all findings');
-    fallbackSteps.push('write_report: Create comprehensive report');
+    fallbackSteps.push('write_report: Create comprehensive analysis report');
+    
+    console.log('[Plan Creation] Error fallback plan with smart searches:', fallbackSteps);
     
     return {
       steps: fallbackSteps,
-      reasoning: `Intelligent fallback plan for ${subject} research`,
+      reasoning: `Smart fallback: analyzing ${subject} with focus on ${wantsMarket ? 'market position' : wantsOpportunities ? 'opportunities' : wantsStrategy ? 'strategy' : 'comprehensive analysis'}`,
       reportSections: hasFiles 
-        ? ['Current Position', 'Market Analysis', 'Opportunities', 'Recommendations']
-        : ['Overview', 'Market Analysis', 'Key Insights', 'Recommendations']
+        ? ['Current Position', 'Market Analysis', 'Opportunities', 'Strategic Recommendations']
+        : ['Overview', 'Industry Analysis', 'Key Insights', 'Recommendations']
     };
   }
 }
@@ -774,12 +887,32 @@ router.get('/stream/:id', async (req, res) => {
       const filesWithContent = uploadedFiles.filter((f: any) => f.content && f.content.trim().length > 0) as UploadedFile[];
       
       if (filesWithContent.length > 0) {
+        // Extract content - DON'T put filename first (causes fallback issues)
         documentContext = filesWithContent
-          .map((f: UploadedFile) => `[${f.fileName}]\n${f.content}`)
-          .join('\n\n---\n\n')
-          .substring(0, 4000); // First 4000 chars for understanding
+          .map((f: UploadedFile) => {
+            // Extract actual content, looking for real text
+            const content = f.content || '';
+            const lines = content.split('\n').filter(l => l.trim().length > 0);
+            
+            // Find first substantial line (not just filename/title markers)
+            let firstSubstantialLine = '';
+            for (const line of lines.slice(0, 10)) {
+              const cleaned = line.replace(/[#*\[\]]/g, '').trim();
+              if (cleaned.length > 10 && !cleaned.toLowerCase().includes('.pdf') && !cleaned.toLowerCase().includes('.doc')) {
+                firstSubstantialLine = cleaned;
+                break;
+              }
+            }
+            
+            return `Document: ${f.fileName}\nKey Subject: ${firstSubstantialLine || 'See content below'}\n\n${content}`;
+          })
+          .join('\n\n---\n\n');
+        
+        // Don't limit to 4000 chars - use more for understanding!
+        documentContext = documentContext.substring(0, 8000);
         
         console.log(`[Research] Document context extracted: ${documentContext.length} chars`);
+        console.log(`[Research] First 200 chars:`, documentContext.substring(0, 200));
       }
     }
     
