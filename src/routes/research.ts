@@ -22,58 +22,107 @@ router.use(requireAuth);
 /**
  * o1-Style Dynamic Plan Creation
  * Creates a real execution plan that will be followed step-by-step
+ * NOW: Uses document content to inform search queries
  */
 async function createResearchPlan(
   query: string,
   depth: string,
   hasFiles: boolean,
-  includeCharts: string[]
-): Promise<{ steps: string[]; reasoning: string }> {
+  includeCharts: string[],
+  documentContext?: string, // NEW: Actual document content
+  chartGoals?: string[] // NEW: What user wants charts to show
+): Promise<{ steps: string[]; reasoning: string; reportSections?: string[] }> {
   try {
+    // Build context for plan creation
+    let contextInfo = `Query: "${query}"
+Depth: ${depth}
+Has uploaded files: ${hasFiles}
+Requested charts: ${includeCharts.length > 0 ? includeCharts.join(', ') : 'none'}`;
+
+    if (documentContext) {
+      contextInfo += `\n\nDocument Content Preview (first 1000 chars):
+${documentContext.substring(0, 1000)}...
+
+IMPORTANT: Use this document content to create SPECIFIC search queries that will complement it!`;
+    }
+
+    if (chartGoals && chartGoals.length > 0) {
+      contextInfo += `\n\nChart Goals (what user wants visualized):
+${chartGoals.join('\n')}
+
+IMPORTANT: Research should gather data that can support these visualizations!`;
+    }
+    
     const messages = [
       { 
         role: 'system', 
-        content: 'You are a research planner. Create a specific step-by-step research plan. Each step must be a concrete action, not vague.' 
+        content: `You are a research planner. Create a comprehensive, specific step-by-step research plan.
+
+KEY PRINCIPLES:
+1. If document content is provided, create TARGETED searches based on what's in it
+2. Make multiple specific searches (3-5 searches for comprehensive depth)
+3. Each search should target a DIFFERENT aspect (don't repeat)
+4. If charts requested, plan searches that will gather data for them
+5. Report sections should be dynamic based on the query type` 
       },
       { 
         role: 'user', 
-        content: `Query: "${query}"
-Depth: ${depth}
-Has uploaded files: ${hasFiles}
-Requested charts: ${includeCharts.length > 0 ? includeCharts.join(', ') : 'none'}
+        content: `${contextInfo}
 
 Create a research plan with specific steps. Available actions:
 - "analyze_files": Extract insights from uploaded documents
-- "search_web": Search external sources for information
-- "search_web_refined": Do a more specific follow-up search
+- "search_web: {specific query}": Search for specific information (be VERY specific)
+- "search_web_refined: {refined query}": Follow-up search with different angle
 - "synthesize": Combine findings into coherent analysis
-- "generate_chart": Create a specific chart (specify type)
+- "generate_chart: {type}": Create a specific chart
 - "quality_check": Evaluate if we have enough information
-- "write_report": Generate final report
+- "write_report": Generate final report with dynamic sections
 
-Rules:
-1. Always start with the most relevant data source (files first if available)
-2. Do quality checks after gathering data
-3. Only search web if needed (not always required)
-4. Chart generation comes after data collection
-5. Report writing is always last
+SEARCH QUERY RULES:
+- Be SPECIFIC (not "search about X" but "latest market data for X in 2024")
+- If document provided, search for things that COMPLEMENT it (external context, comparisons, recent updates)
+- Make 3-5 different searches for comprehensive depth
+- Each search should target different aspects
+
+REPORT SECTIONS (suggest dynamic sections based on query):
+- Don't always use "Executive Summary, Key Findings, Analysis"
+- Adapt sections to the query type
+- Examples: "Market Analysis", "Technical Comparison", "Historical Timeline", "Current State", "Future Outlook"
 
 Respond with ONLY valid JSON:
 {
-  "steps": ["step 1 description", "step 2 description", ...],
-  "reasoning": "why this plan makes sense"
+  "steps": ["step 1 with SPECIFIC details", "step 2...", ...],
+  "reasoning": "why this plan makes sense",
+  "reportSections": ["Section 1", "Section 2", ...] // Dynamic sections for the report
 }
 
 Example for "Compare React vs Vue" with no files:
 {
   "steps": [
-    "search_web: Find current state of React framework",
-    "search_web: Find current state of Vue framework",
-    "quality_check: Verify we have balanced information on both",
-    "synthesize: Compare features, performance, ecosystem",
-    "write_report: Create comparative analysis"
+    "search_web: React 18 latest features, performance benchmarks, and ecosystem size 2024",
+    "search_web: Vue 3 Composition API, performance metrics, and community adoption 2024",
+    "search_web: Head-to-head comparison React vs Vue developer experience and job market",
+    "quality_check: Verify balanced coverage of both frameworks",
+    "synthesize: Compare features, performance, ecosystem, use cases",
+    "write_report: Create comparative analysis with recommendations"
   ],
-  "reasoning": "Comparison requires balanced information from both frameworks"
+  "reasoning": "Comparison requires detailed, balanced information from multiple angles",
+  "reportSections": ["Overview", "React Analysis", "Vue Analysis", "Head-to-Head Comparison", "Recommendations", "Conclusion"]
+}
+
+Example for document + query "What are Cabot's market opportunities?":
+{
+  "steps": [
+    "analyze_files: Extract current business model, products, and stated goals from document",
+    "search_web: Cabot Corporation market size, competitors, and industry trends 2024",
+    "search_web: Emerging opportunities in Cabot's industry segments",
+    "search_web: Recent strategic moves by Cabot and competitors",
+    "quality_check: Verify we have internal + external perspective",
+    "synthesize: Combine document insights with market intelligence",
+    "write_report: Present opportunity analysis with data"
+  ],
+  "reasoning": "Document provides internal view, web searches provide market context and opportunities",
+  "reportSections": ["Current Position (from document)", "Market Landscape", "Competitive Analysis", "Opportunities", "Strategic Recommendations"]
 }`
       }
     ];
@@ -86,8 +135,8 @@ Example for "Compare React vs Vue" with no files:
       console.warn('[Plan Creation] Could not parse APIM response, using default plan');
       return {
         steps: hasFiles 
-          ? ['analyze_files', 'search_web', 'synthesize', 'write_report']
-          : ['search_web', 'synthesize', 'write_report'],
+          ? ['analyze_files', 'search_web: Comprehensive research on the topic', 'synthesize', 'write_report']
+          : ['search_web: Comprehensive research on the topic', 'synthesize', 'write_report'],
         reasoning: 'Default plan due to parsing error'
       };
     }
@@ -95,15 +144,16 @@ Example for "Compare React vs Vue" with no files:
     const plan = JSON.parse(jsonMatch[0]);
     return {
       steps: plan.steps || [],
-      reasoning: plan.reasoning || 'Research plan created'
+      reasoning: plan.reasoning || 'Research plan created',
+      reportSections: plan.reportSections || plan.report_sections || undefined
     };
   } catch (error: any) {
     console.error('[Plan Creation] Error:', error);
     // Fallback plan
     return {
       steps: hasFiles 
-        ? ['analyze_files', 'search_web', 'synthesize', 'write_report']
-        : ['search_web', 'synthesize', 'write_report'],
+        ? ['analyze_files', 'search_web: Comprehensive research', 'synthesize', 'write_report']
+        : ['search_web: Comprehensive research', 'synthesize', 'write_report'],
       reasoning: 'Fallback plan due to error'
     };
   }
@@ -465,9 +515,37 @@ router.get('/stream/:id', async (req, res) => {
       ? run.include_charts
       : (run.include_charts ? JSON.parse(run.include_charts) : []);
     
-    // Step 1: Create Dynamic Research Plan using APIM
+    // Step 1: Extract document content if files uploaded (for plan creation)
+    let documentContext: string | undefined;
+    let chartGoals: string[] | undefined;
+    
+    if (uploadedFiles.length > 0) {
+      emit('thinking', {
+        thought: 'Extracting document content to inform research plan...',
+        thought_type: 'analyzing'
+      });
+      
+      const filesWithContent = uploadedFiles.filter((f: any) => f.content && f.content.trim().length > 0) as UploadedFile[];
+      
+      if (filesWithContent.length > 0) {
+        // Combine document content for plan creation
+        documentContext = filesWithContent
+          .map((f: UploadedFile) => `[${f.fileName}]\n${f.content}`)
+          .join('\n\n---\n\n')
+          .substring(0, 4000); // First 4000 chars for plan context
+        
+        console.log(`[Research] Document context extracted: ${documentContext.length} chars`);
+      }
+    }
+    
+    // Extract chart goals if charts requested
+    if (includeCharts.length > 0) {
+      chartGoals = includeCharts.map(type => `Create ${type} chart to visualize key research findings`);
+    }
+    
+    // Step 2: Create Dynamic Research Plan using APIM (with document context!)
     emit('thinking', {
-      thought: 'Analyzing your query to create a tailored research plan...',
+      thought: 'Analyzing your query' + (documentContext ? ' and document content' : '') + ' to create a tailored research plan...',
       thought_type: 'planning'
     });
     
@@ -475,7 +553,9 @@ router.get('/stream/:id', async (req, res) => {
       run.query,
       run.depth,
       uploadedFiles.length > 0,
-      includeCharts
+      includeCharts,
+      documentContext, // NEW: Pass document content!
+      chartGoals // NEW: Pass chart goals!
     );
     
     console.log('[Research] Plan created:', researchPlan);
@@ -560,10 +640,16 @@ router.get('/stream/:id', async (req, res) => {
           }
           
         } else if (action.includes('search_web')) {
-          // Web search
+          // Web search - use SPECIFIC query from the plan!
           if (isOpenAIConfigured()) {
             const isRefined = action.includes('refined');
             const toolName = isRefined ? 'openai_search_refined' : 'openai_search';
+            
+            // Extract the specific search query from the step description
+            // Format is "search_web: {specific query}"
+            const searchQuery = description && description.trim().length > 0 
+              ? description 
+              : run.query;
             
             emit('tool.call', {
               tool: toolName,
@@ -571,7 +657,8 @@ router.get('/stream/:id', async (req, res) => {
             });
             
             try {
-              const searchResult = await searchWeb(run.query);
+              console.log(`[Research] Executing search with specific query: "${searchQuery}"`);
+              const searchResult = await searchWeb(searchQuery); // Use SPECIFIC query!
               
               allFindings.push(...searchResult.findings);
               sources.push(...searchResult.sources);
@@ -580,8 +667,8 @@ router.get('/stream/:id', async (req, res) => {
                 tool: toolName,
                 findings_count: searchResult.findings.length,
                 key_insights: searchResult.summary
-    });
-  } catch (error: any) {
+              });
+            } catch (error: any) {
               console.error('[Research] Web search error:', error);
               emit('tool.result', {
                 tool: toolName,
@@ -785,8 +872,9 @@ Please try rephrasing your query or check API configuration.`;
           depth: run.depth as any,
           fileFindings: uploadedFiles.length > 0 ? allFindings.filter(f => f.includes('From Uploaded Documents')) : undefined,
           webFindings: allFindings.filter(f => !f.includes('From Uploaded Documents')),
-          sources
-    });
+          sources,
+          reportSections: researchPlan.reportSections // NEW: Pass dynamic sections!
+        });
   } catch (error: any) {
         console.error('[Research] APIM report generation error:', error);
         

@@ -14,6 +14,7 @@ interface ReportContext {
   fileFindings?: string[];
   webFindings?: string[];
   sources?: string[];
+  reportSections?: string[]; // NEW: Dynamic sections from plan
 }
 
 /**
@@ -103,19 +104,20 @@ export async function generateReport(context: ReportContext): Promise<string> {
 
   const wordTarget = wordTargets[context.depth] || '500-800 words';
 
-  // Create APIM prompt
-  const systemPrompt = `You are a professional research analyst creating a comprehensive research report.
-
-CRITICAL REQUIREMENTS:
-- Write in clear, professional markdown format
-- Use proper headings (## for main sections)
-- Include specific data points and findings
-- Be factual and well-structured
-- Target length: ${wordTarget}
-- NO placeholder text or generic statements
-- ONLY include information from the provided findings
-
-Structure:
+  // Build dynamic section structure
+  let sectionStructure = '';
+  
+  if (context.reportSections && context.reportSections.length > 0) {
+    // Use DYNAMIC sections from the plan
+    console.log('[Report Generator] Using dynamic sections from plan:', context.reportSections);
+    sectionStructure = `Structure (ADAPT to the content):\n`;
+    context.reportSections.forEach(section => {
+      sectionStructure += `\n## ${section}\n(Relevant content for this section based on findings)`;
+    });
+  } else {
+    // Fallback to default structure
+    console.log('[Report Generator] Using default section structure');
+    sectionStructure = `Structure:
 ## Executive Summary
 (2-3 paragraph overview)
 
@@ -129,9 +131,27 @@ Structure:
 (3-5 actionable recommendations)
 
 ## Conclusion
-(Brief summary and next steps)
+(Brief summary and next steps)`;
+  }
+  
+  if (context.sources && context.sources.length > 0) {
+    sectionStructure += `\n\n## Sources\n(List of ${context.sources.length} sources referenced)`;
+  }
+  
+  // Create APIM prompt
+  const systemPrompt = `You are a professional research analyst creating a comprehensive research report.
 
-${context.sources && context.sources.length > 0 ? `\n## Sources\n(List of ${context.sources.length} sources referenced)` : ''}`;
+CRITICAL REQUIREMENTS:
+- Write in clear, professional markdown format
+- Use proper headings (## for main sections)
+- Include specific data points and findings
+- Be factual and well-structured
+- Target length: ${wordTarget}
+- NO placeholder text or generic statements
+- ONLY include information from the provided findings
+- Adapt content to fit the requested sections naturally
+
+${sectionStructure}`;
 
   const userPrompt = `Research Query: "${context.query}"
 

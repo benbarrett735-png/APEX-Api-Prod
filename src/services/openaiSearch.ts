@@ -26,21 +26,35 @@ export async function searchWeb(query: string): Promise<SearchResult> {
     throw new Error('OPENAI_API_KEY not configured');
   }
 
-  // Create search prompt
-  const searchPrompt = `You are a research assistant conducting web research.
+  // Create search prompt - MORE AGGRESSIVE
+  const searchPrompt = `You are a research assistant conducting COMPREHENSIVE web research.
 
 Research Query: "${query}"
 
 Task:
 1. Provide a comprehensive summary of current information about this topic
-2. Include 5-8 specific findings or data points
+2. Include 10-15 SPECIFIC findings, data points, statistics, or insights
 3. Focus on recent, relevant information (2024-2025 if applicable)
-4. Be factual and cite information sources when possible
+4. Be SPECIFIC - include numbers, dates, names, concrete details
+5. Cover MULTIPLE angles - don't just repeat the same type of information
+6. If comparing, provide data for BOTH sides
+7. Include sources for major claims
+
+IMPORTANT:
+- Don't be generic - provide SPECIFIC, actionable information
+- Include concrete data points, statistics, examples
+- Make each finding UNIQUE (different aspect)
+- Aim for BREADTH and DEPTH
 
 Format your response as JSON:
 {
   "summary": "Brief overview (2-3 sentences)",
-  "findings": ["Finding 1 with data/context", "Finding 2...", ...],
+  "findings": [
+    "Finding 1 with specific data/numbers/context",
+    "Finding 2 from different angle with details",
+    "Finding 3 with concrete example or statistic",
+    ... (10-15 findings total)
+  ],
   "sources": ["Source 1 description", "Source 2...", ...]
 }`;
 
