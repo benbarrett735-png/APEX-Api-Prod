@@ -857,9 +857,20 @@ REQUIREMENTS:
       const result = await response.json() as any;
       const content = result.choices[0]?.message?.content || '';
 
+      console.log('[ChartService] APIM raw response length:', content.length);
+      console.log('[ChartService] APIM response preview:', content.substring(0, 500));
+
       // Parse the JSON from the response
-      let payload = this.extractJSON(content);
-      console.log('[ChartService] BEFORE normalization:', JSON.stringify(payload));
+      let payload;
+      try {
+        payload = this.extractJSON(content);
+        console.log('[ChartService] BEFORE normalization:', JSON.stringify(payload));
+      } catch (parseError: any) {
+        console.error('[ChartService] Failed to parse APIM response:', parseError.message);
+        console.error('[ChartService] Raw content:', content);
+        throw new Error(`APIM returned invalid JSON: ${parseError.message}`);
+
+      }
 
       // Fix common APIM mistakes for special chart types
       payload = this.normalizeChartPayload(request.chartType, payload);
@@ -869,6 +880,8 @@ REQUIREMENTS:
 
     } catch (error: any) {
       console.error('[ChartService] APIM formatting failed:', error);
+      console.error('[ChartService] Chart type:', request.chartType);
+      console.error('[ChartService] User goal:', request.goal);
       throw error;
     }
   }
@@ -1415,19 +1428,12 @@ REQUIREMENTS:
   Note: Each series.values length must equal len(axes). Creates polar chart with translucent fills.`,
       
       sankey: `SANKEY:
-  keys: title?, nodes[{id, label, col, color?}], links[{source, target, value, color?}], options?
-  options keys: width, height, dpi, column_labels[string[]], node_width(float default 0.035), node_padding(float default 6), curvature(float default 0.35), alpha(float default 0.85), grid(bool default true), y_axis{min, max, tick_step}, default_link_color(hex default "#CBD5E1").
-  Note: Links must connect only adjacent columns (col 0→1, 1→2, etc.). Creates horizontal multi-column flow with smooth ribbons.
-  
-  SANKEY STRUCTURE RULES:
-  1. COLUMN LAYOUT: Use 3 columns minimum (sources → totals → destinations)
-  2. SOURCE NODES (col=0): Input sources like "Salary", "Investments", "Revenue"
-  3. TOTAL NODES (col=1): Aggregation points like "Total Income", "Total Revenue" 
-  4. DESTINATION NODES (col=2): Output categories like "Savings", "Expenses", "Taxes"
-  5. FLOW VALUES: Each link.value should represent the actual flow amount
-  6. NO HALLUCINATIONS: Only use categories explicitly mentioned by user
-  7. DYNAMIC STRUCTURE: Adapt column count and categories based on user request
-  8. VIBRANT FLOWS: Don't specify colors - let the renderer assign random vibrant colors to flows`,
+  keys: title?, nodes[{id, label, col}], links[{source, target, value}], options?
+  Required structure:
+  - nodes: Each node needs id (unique string), label (display name), col (0, 1, 2... for column position)
+  - links: Each link connects two nodes via their ids, with a numeric value for flow size
+  - Links only connect adjacent columns (col 0→1, 1→2, etc)
+  Example: {nodes: [{id:"a", label:"Source", col:0}, {id:"b", label:"Target", col:1}], links: [{source:"a", target:"b", value:100}]}`,
       
       sunburst: `SUNBURST:
   keys: title?, root{label, value, children[]}, options?
