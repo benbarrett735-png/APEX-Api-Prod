@@ -1557,22 +1557,29 @@ Now transform the user's intent + data into the correct JSON for the ${chartType
     
     // Chart-specific formatting instructions
     if (chartType === 'flow') {
-      prompt += `Create a process flow diagram with nodes and edges.
-If the user's goal doesn't clearly describe a process, create a generic flow that represents their topic.
+      prompt += `You MUST create a process flow diagram with 4-6 steps.
 
-Required JSON structure:
+CRITICAL: Even if the topic is not a process, create a logical progression.
+Examples:
+- "ai usage" → Research → Development → Training → Deployment → Usage → Monitoring
+- "sales" → Lead → Qualification → Proposal → Negotiation → Close → Follow-up
+
+Return ONLY valid JSON (no explanations):
 {
-  "title": "chart title",
   "nodes": [
-    {"id": "1", "label": "Start", "type": "start"},
-    {"id": "2", "label": "Process", "type": "process"},
-    {"id": "3", "label": "End", "type": "end"}
+    {"id": "1", "label": "Start Point", "type": "start"},
+    {"id": "2", "label": "Step 1", "type": "process"},
+    {"id": "3", "label": "Step 2", "type": "process"},
+    {"id": "4", "label": "End Point", "type": "end"}
   ],
   "edges": [
     {"from": "1", "to": "2"},
-    {"from": "2", "to": "3"}
+    {"from": "2", "to": "3"},
+    {"from": "3", "to": "4"}
   ]
-}`;
+}
+
+Adapt labels to the topic. Use minimum 4 nodes, maximum 8 nodes.`;
     } else if (chartType === 'gantt') {
       prompt += `Create a timeline with tasks and date ranges.
 If the user's goal doesn't clearly describe tasks, create a generic timeline that represents their topic over time.
@@ -1653,18 +1660,21 @@ Required JSON structure:
   }
 }`;
     } else if (chartType === 'candlestick') {
-      prompt += `Create a candlestick/OHLC chart showing price movements over time.
+      prompt += `Create a candlestick/OHLC chart with 8-12 time periods.
 
-Required JSON structure:
+CRITICAL: Even if the topic is not financial, create simulated OHLC data representing highs/lows over time.
+For "ai usage": show adoption rates with open (start), high (peak), low (minimum), close (end) for each month.
+
+Return ONLY valid JSON (no explanations):
 {
-  "title": "chart title",
   "data": [
-    {"date": "2024-01", "open": 100, "high": 110, "low": 95, "close": 105},
-    {"date": "2024-02", "open": 105, "high": 115, "low": 100, "close": 110}
+    {"date": "Jan", "open": 100, "high": 120, "low": 95, "close": 115},
+    {"date": "Feb", "open": 115, "high": 130, "low": 110, "close": 125},
+    {"date": "Mar", "open": 125, "high": 140, "low": 120, "close": 135}
   ]
 }
 
-Note: Ensure low ≤ open/close ≤ high for each candle.`;
+Rules: low ≤ open ≤ high, low ≤ close ≤ high. Use 8-12 periods minimum.`;
     } else {
       // Standard chart structure
       prompt += `Return the formatted JSON payload for the ${chartType} chart with the following requirements:
