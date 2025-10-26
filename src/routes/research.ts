@@ -1,7 +1,6 @@
 /**
  * Research API Routes - o1-Style Continuous Reasoning
- * Phase 1: Basic SSE streaming with hardcoded events (testing Portal connection)
- * Phase 2+: Will add real APIM reasoning, tool calls, etc.
+ * Phase 2: Real APIM reasoning, OpenAI search, file processing
  * 
  * Per Kevin's plan: All business logic stays in API
  */
@@ -9,6 +8,9 @@
 import { Router } from 'express';
 import { query as dbQuery } from '../db/query.js';
 import { requireAuth } from '../middleware/requireAuth.js';
+import { searchWeb, isOpenAIConfigured } from '../services/openaiSearch.js';
+import { getMultipleFiles, combineFileContents } from '../services/fileRetrieval.js';
+import { generateReport, generateSectionSummary } from '../services/reportGenerator.js';
 
 const router = Router();
 
@@ -90,8 +92,7 @@ async function ensureUser(userId: string, email?: string, orgId?: string) {
 
 /**
  * Background research processor
- * Phase 1: Does nothing (SSE stream handles hardcoded events)
- * Phase 2+: Will contain actual APIM reasoning loop
+ * Phase 2: Real research execution (runs async from SSE stream)
  */
 async function processResearch(
   runId: string,
@@ -102,13 +103,6 @@ async function processResearch(
   console.log(`[Research] Background processing started for ${runId}`);
   console.log(`[Research] Query: "${query}", Depth: ${depth}, Files: ${files.length}`);
   
-  // Phase 1: No-op (SSE stream emits hardcoded events)
-  // Phase 2+: This will contain:
-  // - APIM reasoning loop
-  // - Tool execution
-  // - Self-critique
-  // - Report generation
-  
   // Update status to processing
   await dbQuery(
     `UPDATE o1_research_runs 
@@ -116,6 +110,10 @@ async function processResearch(
      WHERE id = $1`,
     [runId]
   );
+  
+  // Note: SSE stream handles the actual research
+  // This background task just ensures DB status is updated
+  // Real work happens in the SSE stream to emit events in real-time
 }
 
 // ============================================================================
@@ -265,38 +263,38 @@ router.get('/stream/:id', async (req, res) => {
     };
     
     // ========================================================================
-    // PHASE 1: HARDCODED EVENTS (Testing Portal Connection)
+    // PHASE 2: REAL RESEARCH EXECUTION
     // ========================================================================
     
-    console.log('[Research] Emitting hardcoded events for testing...');
+    const startTime = Date.now();
+    console.log('[Research] Starting real research execution...');
     
-    // Event 1: Initial thinking
+    // Track all findings
+    const allFindings: string[] = [];
+    const sources: string[] = [];
+    
+    // Initial thinking
     emit('thinking', {
       thought: 'Starting research analysis...',
       thought_type: 'planning'
     });
     
-    await sleep(800);
-    
     emit('thinking', {
-      thought: `Analyzing query: "${run.query.substring(0, 100)}..."`,
+      thought: `Analyzing query: "${run.query.substring(0, 100)}${run.query.length > 100 ? '...' : ''}"`,
       thought_type: 'analyzing'
     });
     
-    await sleep(1000);
-    
-    // Check if files uploaded
-    // Note: pg returns JSONB as parsed objects, not strings
+    // Parse uploaded files
     const uploadedFiles = Array.isArray(run.uploaded_files) 
       ? run.uploaded_files 
       : (run.uploaded_files ? JSON.parse(run.uploaded_files) : []);
+    
+    // Phase 2A: Process uploaded files (if any)
     if (uploadedFiles.length > 0) {
       emit('thinking', {
-        thought: `Found ${uploadedFiles.length} uploaded file(s). Let me analyze them first.`,
+        thought: `Found ${uploadedFiles.length} uploaded file(s). Let me analyze them first using our secure APIM service.`,
         thought_type: 'planning'
       });
-      
-      await sleep(1000);
       
       emit('tool.call', {
         tool: 'apim_process',
@@ -304,119 +302,144 @@ router.get('/stream/:id', async (req, res) => {
         args: { file_count: uploadedFiles.length }
       });
       
-      await sleep(2000);
-      
-      emit('tool.result', {
-        tool: 'apim_process',
-        findings_count: 5,
-        key_insights: 'Extracted key data points from uploaded documents'
-      });
-      
-      await sleep(800);
-      
-      emit('thinking', {
-        thought: 'The uploaded documents contain valuable insights. I can now synthesize this with broader context.',
-        thought_type: 'synthesis'
-      });
-      
-      await sleep(1000);
+      try {
+        // Retrieve file contents
+        const files = await getMultipleFiles(uploadedFiles);
+        const combinedContent = combineFileContents(files);
+        
+        // Analyze with APIM (secure, keeps data internal)
+        const fileAnalysis = await generateSectionSummary(
+          'Document Analysis',
+          [combinedContent]
+        );
+        
+        allFindings.push(`**From Uploaded Documents:**\n${fileAnalysis}`);
+        sources.push(...files.map(f => `Uploaded file: ${f.fileName}`));
+        
+        emit('tool.result', {
+          tool: 'apim_process',
+          findings_count: files.length,
+          key_insights: fileAnalysis.substring(0, 150) + '...'
+        });
+        
+        emit('thinking', {
+          thought: 'The uploaded documents contain valuable insights. Let me now broaden the research with external sources.',
+          thought_type: 'synthesis'
+        });
+        
+      } catch (error: any) {
+        console.error('[Research] File processing error:', error);
+        emit('thinking', {
+          thought: `Could not process uploaded files: ${error.message}. Continuing with web research.`,
+          thought_type: 'pivot'
+        });
+      }
     } else {
       emit('thinking', {
         thought: 'No uploaded files. I\'ll search for external information to answer this query.',
         thought_type: 'planning'
       });
-      
-      await sleep(1000);
-      
+    }
+    
+    // Phase 2B: External web search using OpenAI
+    if (isOpenAIConfigured()) {
       emit('tool.call', {
         tool: 'openai_search',
         purpose: 'Search public web for relevant information'
       });
       
-      await sleep(2500);
-      
-      emit('tool.result', {
-        tool: 'openai_search',
-        findings_count: 8,
-        key_insights: 'Found recent articles and data points relevant to the query'
+      try {
+        const searchResult = await searchWeb(run.query);
+        
+        allFindings.push(...searchResult.findings);
+        sources.push(...searchResult.sources);
+        
+        emit('tool.result', {
+          tool: 'openai_search',
+          findings_count: searchResult.findings.length,
+          key_insights: searchResult.summary
+        });
+        
+      } catch (error: any) {
+        console.error('[Research] OpenAI search error:', error);
+        emit('thinking', {
+          thought: `External search encountered an issue: ${error.message}. Using available findings.`,
+          thought_type: 'pivot'
+        });
+      }
+    } else {
+      console.warn('[Research] OpenAI not configured, skipping web search');
+      emit('thinking', {
+        thought: 'External search not available. Proceeding with available data.',
+        thought_type: 'planning'
       });
-      
-      await sleep(800);
     }
     
-    // Synthesis thinking
+    // Phase 2C: Generate report sections
     emit('thinking', {
-      thought: 'Based on my analysis, I can now create a coherent report with key findings and recommendations.',
+      thought: `Based on my analysis of ${allFindings.length} findings, I can now create a coherent report with key insights and recommendations.`,
       thought_type: 'synthesis'
     });
     
-    await sleep(1200);
-    
-    // Section completed
+    // Generate Executive Summary
+    const execSummary = await generateSectionSummary('Executive Summary', allFindings.slice(0, 3));
     emit('section.completed', {
       section: 'Executive Summary',
-      preview: 'Based on comprehensive analysis of the data...'
+      preview: execSummary.substring(0, 200) + '...'
     });
-    
-    await sleep(1000);
     
     emit('thinking', {
       thought: 'Let me add detailed findings and supporting evidence.',
       thought_type: 'writing'
     });
     
-    await sleep(1000);
-    
+    // Generate Key Findings preview
+    const keyFindingsPreview = allFindings.slice(0, 5).map((f, i) => `${i + 1}. ${f.substring(0, 80)}...`).join('\n');
     emit('section.completed', {
       section: 'Key Findings',
-      preview: '1. Primary insight identified from analysis\n2. Supporting evidence from multiple sources...'
+      preview: keyFindingsPreview
     });
-    
-    await sleep(800);
     
     emit('thinking', {
       thought: 'Finalizing the report with actionable recommendations.',
       thought_type: 'final_review'
     });
     
-    await sleep(1000);
-    
-    // Generate final report (hardcoded for Phase 1)
-    const finalReport = `# Research Report
+    // Phase 2D: Generate final comprehensive report using APIM
+    let finalReport: string;
+    try {
+      finalReport = await generateReport({
+        query: run.query,
+        depth: run.depth as any,
+        fileFindings: uploadedFiles.length > 0 ? allFindings.filter(f => f.includes('From Uploaded Documents')) : undefined,
+        webFindings: allFindings.filter(f => !f.includes('From Uploaded Documents')),
+        sources
+      });
+    } catch (error: any) {
+      console.error('[Research] Report generation error:', error);
+      // Fallback report
+      finalReport = `# Research Report
 
 ## Executive Summary
 
-Based on comprehensive analysis${uploadedFiles.length > 0 ? ' of the uploaded documents' : ' of available information'}, this report provides key insights and actionable recommendations related to: "${run.query}"
+Research query: "${run.query}"
+
+${execSummary}
 
 ## Key Findings
 
-1. **Primary Insight**: ${uploadedFiles.length > 0 ? 'Document analysis reveals critical data points' : 'Recent trends indicate significant developments in this area'}
-2. **Supporting Evidence**: Multiple sources corroborate the main findings
-3. **Context**: ${run.depth === 'comprehensive' ? 'Extensive' : 'Focused'} analysis conducted
+${allFindings.map((f, i) => `${i + 1}. ${f}`).join('\n\n')}
 
-## Analysis
+## Sources
 
-The research process involved:
-- ${uploadedFiles.length > 0 ? `Secure analysis of ${uploadedFiles.length} uploaded document(s) using APIM` : 'External web search for recent information'}
-- Synthesis of multiple data points
-- Critical evaluation of findings
-
-## Recommendations
-
-1. Consider the primary insights in decision-making
-2. Review supporting evidence for context
-3. Monitor ongoing developments in this area
-
-## Conclusion
-
-This ${run.depth} research provides a solid foundation for understanding the topic. ${uploadedFiles.length > 0 ? 'The uploaded documents were instrumental in providing specific insights.' : 'External sources provided valuable context.'}
+${sources.map((s, i) => `${i + 1}. ${s}`).join('\n')}
 
 ---
 
-*Research completed at ${new Date().toISOString()}*
-*Depth: ${run.depth}*
-${uploadedFiles.length > 0 ? `*Files analyzed: ${uploadedFiles.length}*` : '*Sources: External web search*'}
-`;
+*Note: Report generation encountered an issue. This is a preliminary summary of findings.*`;
+    }
+    
+    const duration = Math.round((Date.now() - startTime) / 1000);
     
     // Final completion event
     emit('research.completed', {
@@ -424,9 +447,11 @@ ${uploadedFiles.length > 0 ? `*Files analyzed: ${uploadedFiles.length}*` : '*Sou
       report_content: finalReport,
       metadata: {
         word_count: finalReport.split(/\s+/).length,
-        duration_seconds: 10,
-        phase: 1, // Phase 1: Hardcoded
+        duration_seconds: duration,
+        phase: 2, // Phase 2: Real research
         files_analyzed: uploadedFiles.length,
+        web_sources: sources.length,
+        findings_count: allFindings.length,
         depth: run.depth
       }
     });
