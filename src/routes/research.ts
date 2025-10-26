@@ -20,21 +20,111 @@ const router = Router();
 router.use(requireAuth);
 
 /**
+ * o1-Style Dynamic Plan Creation
+ * Creates a real execution plan that will be followed step-by-step
+ */
+async function createResearchPlan(
+  query: string,
+  depth: string,
+  hasFiles: boolean,
+  includeCharts: string[]
+): Promise<{ steps: string[]; reasoning: string }> {
+  try {
+    const messages = [
+      { 
+        role: 'system', 
+        content: 'You are a research planner. Create a specific step-by-step research plan. Each step must be a concrete action, not vague.' 
+      },
+      { 
+        role: 'user', 
+        content: `Query: "${query}"
+Depth: ${depth}
+Has uploaded files: ${hasFiles}
+Requested charts: ${includeCharts.length > 0 ? includeCharts.join(', ') : 'none'}
+
+Create a research plan with specific steps. Available actions:
+- "analyze_files": Extract insights from uploaded documents
+- "search_web": Search external sources for information
+- "search_web_refined": Do a more specific follow-up search
+- "synthesize": Combine findings into coherent analysis
+- "generate_chart": Create a specific chart (specify type)
+- "quality_check": Evaluate if we have enough information
+- "write_report": Generate final report
+
+Rules:
+1. Always start with the most relevant data source (files first if available)
+2. Do quality checks after gathering data
+3. Only search web if needed (not always required)
+4. Chart generation comes after data collection
+5. Report writing is always last
+
+Respond with ONLY valid JSON:
+{
+  "steps": ["step 1 description", "step 2 description", ...],
+  "reasoning": "why this plan makes sense"
+}
+
+Example for "Compare React vs Vue" with no files:
+{
+  "steps": [
+    "search_web: Find current state of React framework",
+    "search_web: Find current state of Vue framework",
+    "quality_check: Verify we have balanced information on both",
+    "synthesize: Compare features, performance, ecosystem",
+    "write_report: Create comparative analysis"
+  ],
+  "reasoning": "Comparison requires balanced information from both frameworks"
+}`
+      }
+    ];
+    
+    const response = await callAPIM(messages);
+    
+    // Parse JSON from response
+    const jsonMatch = response.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      console.warn('[Plan Creation] Could not parse APIM response, using default plan');
+      return {
+        steps: hasFiles 
+          ? ['analyze_files', 'search_web', 'synthesize', 'write_report']
+          : ['search_web', 'synthesize', 'write_report'],
+        reasoning: 'Default plan due to parsing error'
+      };
+    }
+    
+    const plan = JSON.parse(jsonMatch[0]);
+    return {
+      steps: plan.steps || [],
+      reasoning: plan.reasoning || 'Research plan created'
+    };
+  } catch (error: any) {
+    console.error('[Plan Creation] Error:', error);
+    // Fallback plan
+    return {
+      steps: hasFiles 
+        ? ['analyze_files', 'search_web', 'synthesize', 'write_report']
+        : ['search_web', 'synthesize', 'write_report'],
+      reasoning: 'Fallback plan due to error'
+    };
+  }
+}
+
+/**
  * o1-Style Quality Assessment
- * Evaluates research findings and suggests improvements
+ * Evaluates research findings and suggests next action
  */
 async function assessFindingsQuality(findings: string[], query: string): Promise<{
   score: number;
   reasoning: string;
-  suggestedQuery?: string;
-  shouldExpand: boolean;
+  nextAction?: string;
+  shouldContinue: boolean;
 }> {
   if (findings.length === 0) {
     return {
       score: 0,
       reasoning: 'No findings collected',
-      suggestedQuery: query,
-      shouldExpand: true
+      nextAction: 'search_web',
+      shouldContinue: true
     };
   }
   
@@ -49,15 +139,14 @@ ${findings.slice(0, 5).map((f, i) => `${i + 1}. ${f.substring(0, 200)}...`).join
 Evaluate:
 1. Do these findings answer the query comprehensively?
 2. Quality score (1-10)
-3. Should we search for more/different information?
-4. If yes, what refined query would work better?
+3. What should we do next? (continue_plan, search_more, or finish)
 
 Respond with ONLY valid JSON:
 {
   "score": 1-10,
   "reasoning": "brief explanation",
-  "suggested_query": "refined query if needed",
-  "should_expand": true/false
+  "next_action": "continue_plan or search_web_refined or finish",
+  "should_continue": true/false
 }` }
     ];
     
@@ -67,19 +156,19 @@ Respond with ONLY valid JSON:
     const jsonMatch = response.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       console.warn('[Quality Assessment] Could not parse APIM response');
-      return { score: 7, reasoning: 'Assessment unavailable', shouldExpand: false };
+      return { score: 7, reasoning: 'Assessment unavailable', shouldContinue: true };
     }
     
     const assessment = JSON.parse(jsonMatch[0]);
     return {
       score: assessment.score || 7,
       reasoning: assessment.reasoning || 'Quality assessment complete',
-      suggestedQuery: assessment.suggested_query,
-      shouldExpand: assessment.should_expand || false
+      nextAction: assessment.next_action,
+      shouldContinue: assessment.should_continue !== false
     };
   } catch (error: any) {
     console.error('[Quality Assessment] Error:', error);
-    return { score: 7, reasoning: 'Assessment failed, proceeding', shouldExpand: false };
+    return { score: 7, reasoning: 'Assessment failed, proceeding', shouldContinue: true };
   }
 }
 
@@ -205,6 +294,17 @@ router.post('/start', async (req, res) => {
       include_charts = [],
       target_sources = []
     }: ResearchStartRequest = req.body;
+    
+    // Debug logging for file upload issue
+    console.log('[Research] POST /start received:');
+    console.log('  Query:', query?.substring(0, 100));
+    console.log('  Depth:', depth);
+    console.log('  uploaded_files type:', typeof uploaded_files);
+    console.log('  uploaded_files is array:', Array.isArray(uploaded_files));
+    console.log('  uploaded_files length:', uploaded_files?.length || 0);
+    if (uploaded_files && uploaded_files.length > 0) {
+      console.log('  First file:', JSON.stringify(uploaded_files[0], null, 2));
+    }
     
     // Extract user from validated JWT
     const userId = req.auth?.sub as string;
@@ -335,263 +435,239 @@ router.get('/stream/:id', async (req, res) => {
     };
     
     // ========================================================================
-    // PHASE 2: DYNAMIC RESEARCH EXECUTION
+    // PHASE 3: TRUE DYNAMIC PLANNING + EXECUTION (o1-Style)
     // ========================================================================
     
     const startTime = Date.now();
-    console.log('[Research] Starting dynamic research execution...');
+    console.log('[Research] Starting o1-style research with dynamic planning...');
     
     // Track all findings
     const allFindings: string[] = [];
     const sources: string[] = [];
+    let documentAnalysisResult: string | null = null;
     
     // Parse uploaded files and chart requests
+    console.log('[Research] Raw uploaded_files from DB:', typeof run.uploaded_files, run.uploaded_files);
     const uploadedFiles: UploadedFile[] = Array.isArray(run.uploaded_files) 
       ? run.uploaded_files 
       : (run.uploaded_files ? JSON.parse(run.uploaded_files) : []);
+    console.log('[Research] Parsed uploadedFiles:', uploadedFiles.length, 'files');
+    if (uploadedFiles.length > 0) {
+      console.log('[Research] First file:', {
+        hasUploadId: !!uploadedFiles[0]?.uploadId,
+        hasFileName: !!uploadedFiles[0]?.fileName,
+        hasContent: !!uploadedFiles[0]?.content,
+        contentLength: uploadedFiles[0]?.content?.length || 0
+      });
+    }
     
     const includeCharts: string[] = Array.isArray(run.include_charts)
       ? run.include_charts
       : (run.include_charts ? JSON.parse(run.include_charts) : []);
     
-    // Initial analysis - determine research strategy
+    // Step 1: Create Dynamic Research Plan using APIM
     emit('thinking', {
-      thought: 'Analyzing your query to determine the best research approach...',
+      thought: 'Analyzing your query to create a tailored research plan...',
       thought_type: 'planning'
     });
     
-    // Analyze query complexity and type
-    const queryLower = run.query.toLowerCase();
-    const hasComparison = queryLower.includes('compare') || queryLower.includes('vs') || queryLower.includes('versus');
-    const hasTimeline = queryLower.includes('history') || queryLower.includes('timeline') || queryLower.includes('evolution');
-    const hasAnalysis = queryLower.includes('analyze') || queryLower.includes('breakdown') || queryLower.includes('evaluate');
-    const hasData = queryLower.includes('data') || queryLower.includes('statistics') || queryLower.includes('metrics');
+    const researchPlan = await createResearchPlan(
+      run.query,
+      run.depth,
+      uploadedFiles.length > 0,
+      includeCharts
+    );
     
-    // Determine research depth dynamically
-    let estimatedSteps = 5; // Base
-    if (run.depth === 'comprehensive') estimatedSteps = 12;
-    else if (run.depth === 'long') estimatedSteps = 9;
-    else if (run.depth === 'medium') estimatedSteps = 7;
-    else estimatedSteps = 5;
+    console.log('[Research] Plan created:', researchPlan);
     
-    // Adjust based on query type and features
-    if (hasComparison) estimatedSteps += 2;
-    if (hasTimeline) estimatedSteps += 2;
-    if (hasAnalysis) estimatedSteps += 1;
-    if (uploadedFiles.length > 0) estimatedSteps += 2;
-    if (includeCharts.length > 0) estimatedSteps += includeCharts.length; // Each chart adds a step
-    
+    // Show the plan to the user
     emit('thinking', {
-      thought: `Query type: ${hasComparison ? 'Comparative analysis' : hasTimeline ? 'Historical research' : hasAnalysis ? 'Deep analysis' : 'Informational research'}. Planning ${estimatedSteps} research steps.`,
+      thought: `Research plan: ${researchPlan.steps.length} steps. ${researchPlan.reasoning}`,
       thought_type: 'planning'
     });
     
-    // Phase 2A: Process uploaded files (if any)
-    if (uploadedFiles.length > 0) {
-      emit('thinking', {
-        thought: `Analyzing ${uploadedFiles.length} uploaded document${uploadedFiles.length > 1 ? 's' : ''}...`,
-        thought_type: 'analyzing'
-      });
-      
-      // Check if files have content (ADI-extracted)
-      const filesWithContent = uploadedFiles.filter((f: any) => f.content && f.content.trim().length > 0) as UploadedFile[];
-      
-      if (filesWithContent.length > 0) {
-        emit('tool.call', {
-          tool: 'document_analysis',
-          purpose: `Analyze ${filesWithContent.length} uploaded document${filesWithContent.length > 1 ? 's' : ''}`
-        });
-        
-        try {
-          // Combine all file contents
-          const combinedContent = filesWithContent
-            .map((f: UploadedFile) => `### ${f.fileName}\n\n${f.content}`)
-            .join('\n\n---\n\n');
-          
-          console.log(`[Research] Processing ${filesWithContent.length} files with content (${combinedContent.length} chars total)`);
-          
-          // Use APIM to extract key findings from documents
-          const documentAnalysis = await generateSectionSummary(
-            'Document Analysis', 
-            [`Extracted content from ${filesWithContent.length} document(s):\n\n${combinedContent.substring(0, 8000)}`]
-          );
-          
-          // Extract findings from analysis
-          const documentFindings = documentAnalysis
-            .split('\n')
-            .filter(line => line.trim().length > 20 && !line.startsWith('#'))
-            .map(line => `[From Uploaded Documents] ${line.trim()}`)
-            .slice(0, 10); // Top 10 findings from documents
-          
-          allFindings.push(...documentFindings);
-          sources.push(...filesWithContent.map((f: UploadedFile) => `Uploaded: ${f.fileName}`));
-          
-          emit('tool.result', {
-            tool: 'document_analysis',
-            findings_count: documentFindings.length,
-            key_insights: `Extracted ${documentFindings.length} key insights from uploaded documents`
-          });
-          
-          emit('thinking', {
-            thought: `Extracted ${documentFindings.length} key findings from your uploaded documents. Let me complement this with external research.`,
-            thought_type: 'analyzing'
+    emit('thinking', {
+      thought: `Steps: ${researchPlan.steps.map((s, i) => `\n${i + 1}. ${s}`).join('')}`,
+      thought_type: 'planning'
     });
-  } catch (error: any) {
-          console.error('[Research] Document analysis error:', error);
-          emit('tool.result', {
-            tool: 'document_analysis',
-            findings_count: 0,
-            key_insights: `Analysis failed: ${error.message}. Proceeding with web research.`
-          });
-        }
-      } else {
-        console.warn('[Research] Files uploaded but no content provided');
-        emit('thinking', {
-          thought: 'Files uploaded but content not available yet. Proceeding with web research.',
-          thought_type: 'planning'
-        });
-      }
-    } else {
-      emit('thinking', {
-        thought: 'No uploaded files. I\'ll search for external information to answer this query.',
-        thought_type: 'planning'
-      });
-    }
     
-    // Phase 2B: External web search using OpenAI
-    if (isOpenAIConfigured()) {
-      emit('tool.call', {
-        tool: 'openai_search',
-        purpose: 'Search public web for relevant information'
+    // Step 2: Execute the plan step-by-step
+    for (let i = 0; i < researchPlan.steps.length; i++) {
+      const step = researchPlan.steps[i];
+      console.log(`[Research] Executing step ${i + 1}/${researchPlan.steps.length}: ${step}`);
+      
+      emit('thinking', {
+        thought: `Step ${i + 1}/${researchPlan.steps.length}: ${step}`,
+        thought_type: 'executing'
       });
+      
+      // Parse step action (format: "action: description")
+      const colonIndex = step.indexOf(':');
+      const action = colonIndex > 0 ? step.substring(0, colonIndex).trim().toLowerCase() : step.toLowerCase();
+      const description = colonIndex > 0 ? step.substring(colonIndex + 1).trim() : step;
       
       try {
-        const searchResult = await searchWeb(run.query);
-        
-        allFindings.push(...searchResult.findings);
-        sources.push(...searchResult.sources);
-        
-        emit('tool.result', {
-          tool: 'openai_search',
-          findings_count: searchResult.findings.length,
-          key_insights: searchResult.summary
-        });
-        
-        // Phase 3: o1-Style Self-Critique
-        emit('thinking', {
-          thought: 'Evaluating quality of research findings...',
-          thought_type: 'self_critique'
-        });
-        
-        const qualityCheck = await assessFindingsQuality(allFindings, run.query);
-        
-        if (qualityCheck.score < 6 && qualityCheck.shouldExpand) {
-          emit('thinking', {
-            thought: `Research quality: ${qualityCheck.score}/10. ${qualityCheck.reasoning}. Let me try a different approach...`,
-            thought_type: 'self_critique'
-          });
+        // Execute based on action type
+        if (action.includes('analyze_file') || action.includes('analyze_document')) {
+          // File analysis
+          const filesWithContent = uploadedFiles.filter((f: any) => f.content && f.content.trim().length > 0) as UploadedFile[];
           
-          emit('thinking', {
-            thought: `Pivoting strategy: Using more specific search terms to improve results.`,
-            thought_type: 'pivot'
-          });
+          if (filesWithContent.length > 0) {
+            emit('tool.call', {
+              tool: 'document_analysis',
+              purpose: description || `Analyze ${filesWithContent.length} uploaded document${filesWithContent.length > 1 ? 's' : ''}`
+            });
+            
+            try {
+              const combinedContent = filesWithContent
+                .map((f: UploadedFile) => `### ${f.fileName}\n\n${f.content}`)
+                .join('\n\n---\n\n');
+              
+              console.log(`[Research] Processing ${filesWithContent.length} files with content (${combinedContent.length} chars total)`);
+              
+              documentAnalysisResult = await generateSectionSummary(
+                'Document Analysis', 
+                [`Extracted content from ${filesWithContent.length} document(s):\n\n${combinedContent.substring(0, 8000)}`]
+              );
+              
+              const documentFindings = documentAnalysisResult
+                .split('\n')
+                .filter(line => line.trim().length > 20 && !line.startsWith('#'))
+                .map(line => `[From Uploaded Documents] ${line.trim()}`)
+                .slice(0, 10);
+              
+              allFindings.push(...documentFindings);
+              sources.push(...filesWithContent.map((f: UploadedFile) => `Uploaded: ${f.fileName}`));
+              
+              emit('tool.result', {
+                tool: 'document_analysis',
+                findings_count: documentFindings.length,
+                key_insights: `Extracted ${documentFindings.length} key insights from uploaded documents`
+              });
+  } catch (error: any) {
+              console.error('[Research] Document analysis error:', error);
+              emit('tool.result', {
+                tool: 'document_analysis',
+                findings_count: 0,
+                key_insights: `Analysis failed: ${error.message}`
+              });
+            }
+          } else {
+            emit('thinking', {
+              thought: 'Files uploaded but content not available. Skipping this step.',
+              thought_type: 'pivot'
+            });
+          }
           
-          // Pivot: Try refined search
-          try {
-            const refinedQuery = qualityCheck.suggestedQuery || run.query;
+        } else if (action.includes('search_web')) {
+          // Web search
+          if (isOpenAIConfigured()) {
+            const isRefined = action.includes('refined');
+            const toolName = isRefined ? 'openai_search_refined' : 'openai_search';
             
             emit('tool.call', {
-              tool: 'openai_search_refined',
-              purpose: `Refined search with better query: "${refinedQuery.substring(0, 50)}..."`
+              tool: toolName,
+              purpose: description || 'Search public web for relevant information'
             });
             
-            const refinedSearch = await searchWeb(refinedQuery);
-            allFindings.push(...refinedSearch.findings);
-            sources.push(...refinedSearch.sources);
-            
-            emit('tool.result', {
-              tool: 'openai_search_refined',
-              findings_count: refinedSearch.findings.length,
-              key_insights: `Refined search found ${refinedSearch.findings.length} additional items`
+            try {
+              const searchResult = await searchWeb(run.query);
+              
+              allFindings.push(...searchResult.findings);
+              sources.push(...searchResult.sources);
+              
+              emit('tool.result', {
+                tool: toolName,
+                findings_count: searchResult.findings.length,
+                key_insights: searchResult.summary
+    });
+  } catch (error: any) {
+              console.error('[Research] Web search error:', error);
+              emit('tool.result', {
+                tool: toolName,
+                findings_count: 0,
+                key_insights: `Search failed: ${error.message}`
+              });
+            }
+          } else {
+            emit('thinking', {
+              thought: 'External search not available. Skipping this step.',
+              thought_type: 'pivot'
             });
-            
-            console.log(`[Research] Refined search complete: ${refinedSearch.findings.length} additional findings`);
-          } catch (error: any) {
-            console.error('[Research] Refined search error:', error);
           }
-        } else {
+          
+        } else if (action.includes('quality_check') || action.includes('evaluate')) {
+          // Quality assessment
           emit('thinking', {
-            thought: `Quality check: ${qualityCheck.score}/10. ${qualityCheck.reasoning}. Proceeding to synthesis.`,
+            thought: 'Evaluating quality of research findings...',
             thought_type: 'self_critique'
+          });
+          
+          try {
+            const qualityCheck = await assessFindingsQuality(allFindings, run.query);
+            
+            emit('thinking', {
+              thought: `Quality check: ${qualityCheck.score}/10. ${qualityCheck.reasoning}`,
+              thought_type: 'self_critique'
+            });
+            
+            // If quality is low and suggests more search, add to plan
+            if (qualityCheck.score < 6 && qualityCheck.nextAction === 'search_web_refined') {
+              emit('thinking', {
+                thought: 'Quality insufficient. Adding refined search to plan...',
+                thought_type: 'pivot'
+              });
+              
+              researchPlan.steps.splice(i + 1, 0, 'search_web_refined: Search with more specific terms');
+              console.log('[Research] Plan adjusted: Added refined search step');
+            }
+          } catch (error: any) {
+            console.error('[Research] Quality check error:', error);
+          }
+          
+        } else if (action.includes('synthesize') || action.includes('combine')) {
+          // Synthesis step
+          emit('thinking', {
+            thought: `Synthesizing ${allFindings.length} findings from ${sources.length} sources...`,
+            thought_type: 'synthesis'
+          });
+          
+        } else if (action.includes('generate_chart') || action.includes('chart')) {
+          // Chart generation (handled later in batch)
+          emit('thinking', {
+            thought: `Chart generation scheduled: ${description}`,
+            thought_type: 'planning'
+          });
+          
+        } else if (action.includes('write_report') || action.includes('final')) {
+          // Report writing (handled at the end)
+          emit('thinking', {
+            thought: 'Preparing final report with all findings...',
+            thought_type: 'writing'
+          });
+          
+        } else {
+          // Unknown step - just acknowledge it
+          emit('thinking', {
+            thought: `Executing: ${step}`,
+            thought_type: 'executing'
           });
         }
         
       } catch (error: any) {
-        console.error('[Research] OpenAI search error:', error);
+        console.error(`[Research] Error executing step "${step}":`, error);
         emit('thinking', {
-          thought: `External search encountered an issue: ${error.message}. Using available findings.`,
+          thought: `Step encountered an issue: ${error.message}. Continuing with next step.`,
           thought_type: 'pivot'
         });
       }
-    } else {
-      console.warn('[Research] OpenAI not configured, skipping web search');
-      emit('thinking', {
-        thought: 'External search not available. Proceeding with available data.',
-        thought_type: 'planning'
-      });
     }
     
-    // Phase 2C: Generate report sections (dynamic based on findings)
+    // Step 3: Generate charts (if requested)
     emit('thinking', {
-      thought: `Synthesizing ${allFindings.length} findings from ${sources.length} sources into a comprehensive report...`,
+      thought: 'Plan execution complete. Generating outputs...',
       thought_type: 'synthesis'
     });
-    
-    // Determine sections based on query type
-    const sections: string[] = ['Executive Summary', 'Key Findings'];
-    if (hasComparison) sections.push('Comparative Analysis');
-    if (hasTimeline) sections.push('Historical Context');
-    if (hasAnalysis) sections.push('Detailed Analysis');
-    if (hasData) sections.push('Data & Metrics');
-    sections.push('Recommendations', 'Conclusion');
-    
-    // Generate Executive Summary (with error handling)
-    let execSummary = 'Analysis of research findings';
-    try {
-      if (allFindings.length > 0) {
-        execSummary = await generateSectionSummary('Executive Summary', allFindings.slice(0, 3));
-      }
-    } catch (error: any) {
-      console.error('[Research] Executive summary generation error:', error);
-      execSummary = `Research on "${run.query}" with ${allFindings.length} findings from ${sources.length} sources.`;
-    }
-    
-    emit('section.completed', {
-      section: 'Executive Summary',
-      preview: execSummary.substring(0, 200) + (execSummary.length > 200 ? '...' : '')
-    });
-    
-    emit('thinking', {
-      thought: `Building ${sections.length} sections based on your query type and the findings collected.`,
-      thought_type: 'writing'
-    });
-    
-    // Generate Key Findings preview
-    const keyFindingsPreview = allFindings.length > 0
-      ? allFindings.slice(0, 5).map((f, i) => `${i + 1}. ${f.substring(0, 80)}${f.length > 80 ? '...' : ''}`).join('\n')
-      : '1. Research findings being compiled...';
-    
-    emit('section.completed', {
-      section: 'Key Findings',
-      preview: keyFindingsPreview
-    });
-    
-    emit('thinking', {
-      thought: 'Finalizing with recommendations and actionable insights.',
-      thought_type: 'final_review'
-    });
-    
-    // Phase 2D: Generate charts (if requested)
     const chartUrls: Record<string, string> = {};
     
     if (includeCharts.length > 0 && allFindings.length > 0) {
@@ -655,7 +731,35 @@ router.get('/stream/:id', async (req, res) => {
       }
     }
     
-    // Phase 2E: Generate final comprehensive report
+    // Step 4: Generate section previews
+    if (allFindings.length > 0) {
+      let execSummary = 'Analysis of research findings';
+      try {
+        execSummary = await generateSectionSummary('Executive Summary', allFindings.slice(0, 3));
+      } catch (error: any) {
+        console.error('[Research] Executive summary generation error:', error);
+        execSummary = `Research on "${run.query}" with ${allFindings.length} findings from ${sources.length} sources.`;
+      }
+      
+      emit('section.completed', {
+        section: 'Executive Summary',
+        preview: execSummary.substring(0, 200) + (execSummary.length > 200 ? '...' : '')
+      });
+      
+      const keyFindingsPreview = allFindings.slice(0, 5).map((f, i) => `${i + 1}. ${f.substring(0, 80)}${f.length > 80 ? '...' : ''}`).join('\n');
+      
+      emit('section.completed', {
+        section: 'Key Findings',
+        preview: keyFindingsPreview
+      });
+    }
+    
+    emit('thinking', {
+      thought: 'Finalizing report with actionable insights...',
+      thought_type: 'final_review'
+    });
+    
+    // Step 5: Generate final comprehensive report
     let finalReport: string;
     
     // If no findings, create simple report
@@ -682,8 +786,8 @@ Please try rephrasing your query or check API configuration.`;
           fileFindings: uploadedFiles.length > 0 ? allFindings.filter(f => f.includes('From Uploaded Documents')) : undefined,
           webFindings: allFindings.filter(f => !f.includes('From Uploaded Documents')),
           sources
-        });
-      } catch (error: any) {
+    });
+  } catch (error: any) {
         console.error('[Research] APIM report generation error:', error);
         
         // Create fallback report without APIM
@@ -691,7 +795,7 @@ Please try rephrasing your query or check API configuration.`;
 
 ## Executive Summary
 
-${execSummary}
+Research on "${run.query}" with ${allFindings.length} findings from ${sources.length} sources.
 
 ## Key Findings
 
@@ -699,7 +803,7 @@ ${allFindings.map((f, i) => `${i + 1}. ${f}`).join('\n\n')}
 
 ## Analysis
 
-The research covered ${allFindings.length} key findings from ${sources.length} sources related to: "${run.query}"
+The research covered ${allFindings.length} key findings from ${sources.length} sources.
 
 ## Sources
 
@@ -733,7 +837,9 @@ This ${run.depth}-depth research provides foundational information on the topic.
       metadata: {
         word_count: finalReport.split(/\s+/).length,
         duration_seconds: duration,
-        phase: 2, // Phase 2: Real research with charts
+        phase: 3, // Phase 3: True dynamic planning
+        plan_steps: researchPlan.steps.length,
+        plan_reasoning: researchPlan.reasoning,
         files_analyzed: uploadedFiles.length,
         web_sources: sources.length,
         findings_count: allFindings.length,
