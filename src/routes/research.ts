@@ -20,203 +20,274 @@ const router = Router();
 router.use(requireAuth);
 
 /**
- * o1-Style Understanding Phase
- * FIRST: Deeply understand what the user wants before planning
+ * TOOL-BASED PLANNING
+ * Give APIM everything + available tools, let it decide what to do
  */
-async function understandUserIntent(
+async function createToolBasedPlan(
   query: string,
-  documentContext?: string,
-  includeCharts?: string[],
-  chartRequests?: Array<{type: string; goal?: string}>
+  uploadedFiles: UploadedFile[],
+  depth: string,
+  requestedCharts?: Array<{type: string; goal?: string}>
 ): Promise<{
-  coreSubject: string;
-  userGoal: string;
-  keyTopics: string[];
-  chartDataNeeds?: string[];
-  outputStyle?: string;
-  outputLength?: string;
-  specialInstructions?: string;
+  understanding: {
+    coreSubject: string;
+    userGoal: string;
+    needsExternal: boolean;
+    needsDocAnalysis: boolean;
+    outputFormat: 'brief' | 'standard' | 'comprehensive';
+  };
+  toolCalls: Array<{
+    tool: string;
+    parameters: any;
+    reasoning: string;
+  }>;
 }> {
-  try {
-    const messages = [
-      {
-        role: 'system',
-        content: `You are an intelligent research analyst. Your job is to DEEPLY UNDERSTAND what the user wants before we start research.
-
-CRITICAL: Read carefully and identify the ACTUAL subject. Don't get confused by common words.
-
-Example mistakes to avoid:
-- User asks about "Cabot's Cookery School" → DON'T search for "comprehensive research methodology"
-- User asks about "Apple products" → DON'T search for "fruit nutrition"
-- User asks about "Twitter strategy" → DON'T search for "bird behavior"`
+  // Define available tools for APIM
+  const tools = [
+    {
+      name: "analyze_documents",
+      description: "Extract key insights, facts, and context from uploaded documents",
+      parameters: {
+        focus: "string - what specific information to look for in the documents"
+      }
+    },
+    {
+      name: "search_web",
+      description: "Search public web for information (powered by OpenAI)",
+      parameters: {
+        searchQuery: "string - specific, targeted search query (NOT the user's question!)"
       },
-      {
-        role: 'user',
-        content: `Analyze this research request and tell me EXACTLY what the user wants to know:
+      examples: [
+        { bad: "Tell me about Tesla", good: "Tesla 2024 revenue market share products latest news" },
+        { bad: "Give me a summary of Apple", good: "Apple iPhone sales 2024 market position competitors" }
+      ]
+    },
+    {
+      name: "generate_chart",
+      description: "Create data visualization from research findings",
+      parameters: {
+        chartType: "string - bar, line, pie, scatter, heatmap, etc",
+        dataNeeded: "string - what specific quantitative data points are needed",
+        goal: "string - what the chart should communicate to the user"
+      }
+    },
+    {
+      name: "compile_report",
+      description: "Format final research output",
+      parameters: {
+        format: "string - brief (150-300 words, 2 paragraphs, NO sections), standard (500-800 words, 3-5 sections), comprehensive (1500+ words, 5-8+ sections)",
+        sections: "array of strings or null - section names if structured report, null if brief"
+      }
+    }
+  ];
 
-Query: "${query}"
+  // Extract document content if available
+  const documentContent = uploadedFiles.length > 0
+    ? uploadedFiles.map(f => `FILE: ${f.fileName}\nCONTENT:\n${f.content || '(no content)'}`).join('\n\n---\n\n')
+    : null;
 
-${documentContext ? `Document Content (FULL - ALL ${documentContext.length} chars):
-${documentContext}
+  const systemPrompt = `You are an intelligent research planning AI with access to tools.
 
-IMPORTANT: This document provides context about the ACTUAL subject. Read it CAREFULLY to understand what they're asking about!` : ''}
+YOUR JOB:
+1. UNDERSTAND what the user wants (identify the REAL subject, not query keywords!)
+2. CHOOSE which tools to use
+3. CREATE specific parameters for each tool
 
-${chartRequests && chartRequests.length > 0 ? `Charts Requested:
-${chartRequests.map(cr => `- ${cr.type} chart${cr.goal ? `: ${cr.goal}` : ''}`).join('\n')}
+CRITICAL RULES:
+- Extract the SUBJECT from the query, NOT the query itself!
+  * Query: "Give me a quick summary of Tesla" → Subject: "Tesla"
+  * Query: "Tell me about Cabot's opportunities" → Subject: "Cabot's Cookery School" (from document)
+  * Query: "Compare React vs Vue" → Subject: "React and Vue frameworks"
 
-IMPORTANT: Each chart has a SPECIFIC PURPOSE. The user wants these visualizations, so you need to:
-1. Identify what DATA each chart needs
-2. Plan searches to find that specific data
-3. Make sure the research covers quantitative information for the charts` : ''}
+- If user says "quick" / "summary" / "brief":
+  → Use search_web ONCE with focused query
+  → Use compile_report with format="brief" (NO sections!)
+
+- If user uploads documents:
+  → ALWAYS use analyze_documents FIRST
+  → Then search_web for external context
+  → Use compile_report with format="comprehensive"
+
+- For search_web parameters:
+  → Create queries ABOUT THE SUBJECT, not about the user's question!
+  → Include year "2024" for current info
+  → Be specific about what data you need
+  
+- For compile_report:
+  → "brief" = 2 paragraphs, NO sections, ~200 words
+  → "standard" = 3-5 sections, ~600 words
+  → "comprehensive" = 5-8+ sections, ~1800 words
+
+AVAILABLE TOOLS:
+${JSON.stringify(tools, null, 2)}
 
 Respond with ONLY valid JSON:
 {
-  "coreSubject": "The MAIN thing the user is asking about (be specific!)",
-  "userGoal": "What they want to achieve with this research",
-  "keyTopics": ["Topic 1", "Topic 2", "Topic 3"...] // Specific topics to research
-  ${includeCharts && includeCharts.length > 0 ? ', "chartDataNeeds": ["Data type 1", "Data type 2"...] // What data is needed for the charts' : ''}
-}
-
-Example 1 - Cookery School:
-Query: "What are Cabot's market opportunities?"
-Document: "Cabot's Cookery School is a family-run sustainable cookery school..."
-
-Response:
-{
-  "coreSubject": "Cabot's Cookery School (a cooking school business)",
-  "userGoal": "Identify market opportunities and growth strategies for the cookery school",
-  "keyTopics": [
-    "Cookery school market size and trends",
-    "Competitors in culinary education",
-    "Customer segments for cooking classes",
-    "Marketing channels for cooking schools",
-    "Pricing strategies for culinary courses"
+  "understanding": {
+    "coreSubject": "the REAL subject (extract from query + documents)",
+    "userGoal": "what they want",
+    "needsExternal": boolean,
+    "needsDocAnalysis": boolean,
+    "outputFormat": "brief|standard|comprehensive"
+  },
+  "toolCalls": [
+    {
+      "tool": "tool_name",
+      "parameters": { ...specific params... },
+      "reasoning": "why this tool with these exact params"
+    }
   ]
-}
+}`;
 
-Example 2 - Tech Comparison with Charts:
-Query: "Compare React vs Vue"
-Charts: bar, line
+  const userPrompt = `Query: "${query}"
+Depth requested: ${depth}
 
-Response:
-{
-  "coreSubject": "React and Vue JavaScript frameworks",
-  "userGoal": "Compare the two frameworks to help choose one",
-  "keyTopics": [
-    "React features and performance 2024",
-    "Vue features and performance 2024", 
-    "Developer experience comparison",
-    "Ecosystem and community size",
-    "Job market demand"
-  ],
-  "chartDataNeeds": [
-    "Market share statistics",
-    "Performance benchmarks (load time, bundle size)",
-    "GitHub stars/contributors over time",
-    "Job posting counts by framework"
-  ]
-}`
-      }
-    ];
+${documentContent ? `UPLOADED DOCUMENTS (${uploadedFiles.length} files, ~${documentContent.length} chars total):
+${documentContent.substring(0, 4000)}${documentContent.length > 4000 ? '...(truncated)' : ''}` : 'No uploaded documents.'}
 
-    const response = await callAPIM(messages);
+${requestedCharts && requestedCharts.length > 0 ? `\nREQUESTED CHARTS: ${requestedCharts.map(c => `${c.type}${c.goal ? ` (goal: ${c.goal})` : ''}`).join(', ')}` : ''}
+
+Create a tool-based research plan. Remember:
+- Extract the SUBJECT, not the query words!
+- Match output format to user intent (brief, standard, comprehensive)
+- Create SPECIFIC search queries about the subject
+- Use tools in logical order`;
+
+  try {
+    const response = await callAPIM([
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt }
+    ]);
+
+    console.log('[Tool Planning] APIM response:', response.substring(0, 500));
+
     const jsonMatch = response.match(/\{[\s\S]*\}/);
-    
     if (!jsonMatch) {
-      console.warn('[Understanding] Could not parse APIM response, using document-based fallback');
-      console.warn('[Understanding] APIM response was:', response.substring(0, 500));
-      
-      // Extract key info from document if available
-      let extractedSubject = query;
-      if (documentContext) {
-        // Try to extract business/organization name from document
-        // Look for "Key Subject:" line first
-        const keySubjectMatch = documentContext.match(/Key Subject:\s*([^\n]+)/);
-        if (keySubjectMatch && keySubjectMatch[1].trim().length > 5) {
-          extractedSubject = keySubjectMatch[1].trim();
-        } else {
-          // Fall back to finding substantial content lines
-          const lines = documentContext.split('\n').filter(l => l.trim().length > 0);
-          for (const line of lines) {
-            const cleaned = line.replace(/[#*\[\]]/g, '').trim();
-            // Skip lines that are obviously not subjects
-            if (cleaned.length > 15 && cleaned.length < 150 && 
-                !cleaned.toLowerCase().includes('document:') &&
-                !cleaned.toLowerCase().includes('.pdf') &&
-                !cleaned.toLowerCase().includes('.doc') &&
-                !cleaned.startsWith('---')) {
-              extractedSubject = cleaned;
-              break;
-            }
-          }
-        }
-      }
-      
-      console.log('[Understanding] Fallback extracted subject:', extractedSubject);
-      
-      return {
-        coreSubject: extractedSubject,
-        userGoal: `Research and analysis related to: ${extractedSubject}`,
-        keyTopics: [
-          extractedSubject,
-          `${extractedSubject} market analysis`,
-          `${extractedSubject} industry trends`,
-          `${extractedSubject} competitive landscape`
-        ]
-      };
+      throw new Error('Failed to parse APIM response - no JSON found');
     }
 
-    const understanding = JSON.parse(jsonMatch[0]);
-    console.log('[Understanding] User intent:', understanding);
-    return understanding;
+    const plan = JSON.parse(jsonMatch[0]);
+    console.log('[Tool Planning] Plan created:', plan);
+
+    return plan;
 
   } catch (error: any) {
-    console.error('[Understanding] Error:', error);
-    console.error('[Understanding] Error details:', error.message);
+    console.error('[Tool Planning] Error:', error);
     
-    // Better fallback using document
-    let extractedSubject = query;
-    if (documentContext) {
-      // Look for "Key Subject:" line first
-      const keySubjectMatch = documentContext.match(/Key Subject:\s*([^\n]+)/);
-      if (keySubjectMatch && keySubjectMatch[1].trim().length > 5) {
-        extractedSubject = keySubjectMatch[1].trim();
-      } else {
-        const lines = documentContext.split('\n').filter(l => l.trim().length > 0);
-        for (const line of lines) {
-          const cleaned = line.replace(/[#*\[\]]/g, '').trim();
-          if (cleaned.length > 15 && cleaned.length < 150 && 
-              !cleaned.toLowerCase().includes('document:') &&
-              !cleaned.toLowerCase().includes('.pdf') &&
-              !cleaned.toLowerCase().includes('.doc') &&
-              !cleaned.startsWith('---')) {
-            extractedSubject = cleaned;
-            break;
-          }
+    // Smart fallback: parse query to extract subject
+    let subject = query;
+    const queryLower = query.toLowerCase();
+    
+    // Remove common query words to find the subject
+    subject = query
+      .replace(/give me (a |an )?/gi, '')
+      .replace(/tell me about/gi, '')
+      .replace(/what (is|are)/gi, '')
+      .replace(/quick summary of/gi, '')
+      .replace(/summary of/gi, '')
+      .replace(/brief on/gi, '')
+      .replace(/research on/gi, '')
+      .replace(/analyze/gi, '')
+      .replace(/compare/gi, '')
+      .trim();
+    
+    // If document provided, try to extract subject from it
+    if (documentContent && documentContent.length > 100) {
+      const lines = documentContent.split('\n').filter(l => l.trim().length > 15);
+      for (const line of lines.slice(0, 20)) {
+        const cleaned = line.replace(/[#*\[\]]/g, '').trim();
+        if (cleaned.length > 10 && cleaned.length < 100 &&
+            !cleaned.toLowerCase().includes('file:') &&
+            !cleaned.toLowerCase().includes('content:') &&
+            !cleaned.match(/\.(pdf|doc)/i)) {
+          subject = cleaned;
+          break;
         }
       }
     }
-    
-    console.log('[Understanding] Error fallback extracted subject:', extractedSubject);
-    
+
+    console.log('[Tool Planning] Fallback extracted subject:', subject);
+
+    // Determine format
+    const isBrief = queryLower.includes('quick') || queryLower.includes('brief') || queryLower.includes('summary');
+    const hasDoc = uploadedFiles.length > 0;
+    const format = isBrief && !hasDoc ? 'brief' : hasDoc ? 'comprehensive' : 'standard';
+
+    // Build fallback plan
+    const toolCalls: any[] = [];
+
+    if (hasDoc) {
+      toolCalls.push({
+        tool: 'analyze_documents',
+        parameters: { focus: `Extract key information about ${subject}` },
+        reasoning: 'User uploaded documents'
+      });
+    }
+
+    if (format === 'brief') {
+      toolCalls.push({
+        tool: 'search_web',
+        parameters: { searchQuery: `${subject} overview key facts 2024` },
+        reasoning: 'Quick summary needs focused search'
+      });
+    } else {
+      toolCalls.push({
+        tool: 'search_web',
+        parameters: { searchQuery: `${subject} market position industry trends 2024` },
+        reasoning: 'Need market context'
+      });
+      if (format === 'comprehensive') {
+        toolCalls.push({
+          tool: 'search_web',
+          parameters: { searchQuery: `${subject} competitors analysis opportunities 2024` },
+          reasoning: 'Comprehensive analysis needs competition data'
+        });
+      }
+    }
+
+    if (requestedCharts && requestedCharts.length > 0) {
+      for (const chart of requestedCharts) {
+        toolCalls.push({
+          tool: 'generate_chart',
+          parameters: {
+            chartType: chart.type,
+            dataNeeded: `Quantitative data about ${subject}`,
+            goal: chart.goal || `Visualize ${subject} data`
+          },
+          reasoning: `User requested ${chart.type} chart`
+        });
+      }
+    }
+
+    toolCalls.push({
+      tool: 'compile_report',
+      parameters: {
+        format,
+        sections: format === 'brief' ? null : (hasDoc ? ['Current State', 'Analysis', 'Insights', 'Recommendations'] : ['Overview', 'Analysis', 'Key Insights'])
+      },
+      reasoning: `${format} format requested`
+    });
+
     return {
-      coreSubject: extractedSubject,
-      userGoal: `Research and analysis related to: ${extractedSubject}`,
-      keyTopics: [
-        extractedSubject,
-        `${extractedSubject} market analysis`,
-        `${extractedSubject} industry trends`,
-        `${extractedSubject} competitive landscape`
-      ]
+      understanding: {
+        coreSubject: subject,
+        userGoal: `Research about ${subject}`,
+        needsExternal: true,
+        needsDocAnalysis: hasDoc,
+        outputFormat: format as any
+      },
+      toolCalls
     };
   }
 }
 
+// OLD createResearchPlan function removed - now using tool-based planning
+
 /**
- * o1-Style Dynamic Plan Creation
- * SECOND: Create a detailed, specific plan based on understanding
+ * DELETED OLD FUNCTION - Using createToolBasedPlan instead
  */
-async function createResearchPlan(
+/*
+async function OLD_createResearchPlan_DELETED(
   query: string,
   depth: string,
   understanding: any,
@@ -875,15 +946,15 @@ router.get('/stream/:id', async (req, res) => {
     console.log('[Research] Chart requests:', chartRequests);
     
     // ========================================================================
-    // STEP 1: UNDERSTAND (like o1 thinking - deeply understand first!)
+    // TOOL-BASED RESEARCH: Plan with tools, then execute
     // ========================================================================
     
     emit('thinking', {
-      thought: 'Phase 1: Understanding your request...',
-      thought_type: 'analyzing'
+      thought: 'Analyzing your request and planning research approach...',
+      thought_type: 'planning'
     });
     
-    // Extract document content if files uploaded
+    // Extract document content if needed
     let documentContext: string | undefined;
     
     if (uploadedFiles.length > 0) {
@@ -919,99 +990,68 @@ router.get('/stream/:id', async (req, res) => {
       }
     }
     
-    // FIRST: Deeply understand what the user wants (o1-style)
-    const understanding = await understandUserIntent(
+    // Create tool-based research plan
+    const plan = await createToolBasedPlan(
       run.query,
-      documentContext,
-      includeCharts,
-      chartRequests // Pass full chart requests with goals
-    );
-    
-    console.log('[Research] Understanding:', understanding);
-    
-    emit('thinking', {
-      thought: `Understanding confirmed: Researching "${understanding.coreSubject}" to ${understanding.userGoal}`,
-      thought_type: 'analyzing'
-    });
-    
-    emit('thinking', {
-      thought: `Key topics identified: ${understanding.keyTopics.slice(0, 3).join(', ')}${understanding.keyTopics.length > 3 ? '...' : ''}`,
-      thought_type: 'analyzing'
-    });
-    
-    if (understanding.chartDataNeeds && understanding.chartDataNeeds.length > 0) {
-      emit('thinking', {
-        thought: `Chart data requirements: ${understanding.chartDataNeeds.join(', ')}`,
-        thought_type: 'planning'
-      });
-    }
-    
-    // ========================================================================
-    // STEP 2: PLAN (create detailed execution plan based on understanding)
-    // ========================================================================
-    
-    emit('thinking', {
-      thought: 'Phase 2: Creating comprehensive research plan...',
-      thought_type: 'planning'
-    });
-    
-    const researchPlan = await createResearchPlan(
-      run.query,
+      uploadedFiles,
       run.depth,
-      understanding,
-      uploadedFiles.length > 0,
-      includeCharts,
-      documentContext, // NEW: Pass full document content!
-      chartRequests // NEW: Pass chart requests with goals!
+      chartRequests
     );
     
-    console.log('[Research] Plan created:', researchPlan);
+    console.log('[Tool Planning] Plan created:', JSON.stringify(plan, null, 2));
     
-    // Show the plan to the user
+    // Show understanding
     emit('thinking', {
-      thought: `Research plan: ${researchPlan.steps.length} steps. ${researchPlan.reasoning}`,
-      thought_type: 'planning'
+      thought: `Researching: "${plan.understanding.coreSubject}"`,
+      thought_type: 'analyzing'
     });
     
     emit('thinking', {
-      thought: `Steps: ${researchPlan.steps.map((s, i) => `\n${i + 1}. ${s}`).join('')}`,
+      thought: `Goal: ${plan.understanding.userGoal}`,
+      thought_type: 'analyzing'
+    });
+    
+    emit('thinking', {
+      thought: `Format: ${plan.understanding.outputFormat} (${plan.toolCalls.length} tools)`,
+      thought_type: 'planning'
+    });
+    
+    // Show tool plan
+    emit('thinking', {
+      thought: `Tool Plan:\n${plan.toolCalls.map((tc, i) => `${i + 1}. ${tc.tool}(${Object.keys(tc.parameters).join(', ')})\n   → ${tc.reasoning}`).join('\n')}`,
       thought_type: 'planning'
     });
     
     // ========================================================================
-    // STEP 3: EXECUTE (follow the plan step-by-step)
+    // EXECUTE TOOL CALLS
     // ========================================================================
     
     emit('thinking', {
-      thought: 'Phase 3: Executing research plan...',
+      thought: `Executing ${plan.toolCalls.length} tool${plan.toolCalls.length > 1 ? 's' : ''}...`,
       thought_type: 'executing'
     });
     
-    for (let i = 0; i < researchPlan.steps.length; i++) {
-      const step = researchPlan.steps[i];
-      console.log(`[Research] Executing step ${i + 1}/${researchPlan.steps.length}: ${step}`);
+    for (let i = 0; i < plan.toolCalls.length; i++) {
+      const toolCall = plan.toolCalls[i];
+      console.log(`[Tool Execution] Tool ${i + 1}/${plan.toolCalls.length}: ${toolCall.tool}`, toolCall.parameters);
       
       emit('thinking', {
-        thought: `Step ${i + 1}/${researchPlan.steps.length}: ${step}`,
+        thought: `Tool ${i + 1}/${plan.toolCalls.length}: ${toolCall.tool}`,
         thought_type: 'executing'
       });
       
-      // Parse step action (format: "action: description")
-      const colonIndex = step.indexOf(':');
-      const action = colonIndex > 0 ? step.substring(0, colonIndex).trim().toLowerCase() : step.toLowerCase();
-      const description = colonIndex > 0 ? step.substring(colonIndex + 1).trim() : step;
-      
       try {
-        // Execute based on action type
-        if (action.includes('analyze_file') || action.includes('analyze_document')) {
-          // File analysis
-          const filesWithContent = uploadedFiles.filter((f: any) => f.content && f.content.trim().length > 0) as UploadedFile[];
+        // Execute based on tool type
+        switch (toolCall.tool) {
+          case 'analyze_documents': {
+            // File analysis
+            const filesWithContent = uploadedFiles.filter((f: any) => f.content && f.content.trim().length > 0) as UploadedFile[];
           
-          if (filesWithContent.length > 0) {
-            emit('tool.call', {
-              tool: 'document_analysis',
-              purpose: description || `Analyze ${filesWithContent.length} uploaded document${filesWithContent.length > 1 ? 's' : ''}`
-            });
+            if (filesWithContent.length > 0) {
+              emit('tool.call', {
+                tool: 'analyze_documents',
+                purpose: toolCall.parameters.focus || `Analyze ${filesWithContent.length} uploaded document${filesWithContent.length > 1 ? 's' : ''}`
+              });
             
             try {
               const combinedContent = filesWithContent
@@ -1038,7 +1078,7 @@ router.get('/stream/:id', async (req, res) => {
                 tool: 'document_analysis',
                 findings_count: documentFindings.length,
                 key_insights: `Extracted ${documentFindings.length} key insights from uploaded documents`
-              });
+    });
   } catch (error: any) {
               console.error('[Research] Document analysis error:', error);
               emit('tool.result', {
@@ -1053,174 +1093,134 @@ router.get('/stream/:id', async (req, res) => {
               thought_type: 'pivot'
             });
           }
-          
-        } else if (action.includes('search_web')) {
-          // Web search - use SPECIFIC query from the plan!
-          if (isOpenAIConfigured()) {
-            const isRefined = action.includes('refined');
-            const toolName = isRefined ? 'openai_search_refined' : 'openai_search';
-            
-            // Extract the specific search query from the step description
-            // Format is "search_web: {specific query}"
-            const searchQuery = description && description.trim().length > 0 
-              ? description 
-              : run.query;
-            
-            emit('tool.call', {
-              tool: toolName,
-              purpose: description || 'Search public web for relevant information'
-            });
-            
-            try {
-              console.log(`[Research] Executing search with specific query: "${searchQuery}"`);
-              const searchResult = await searchWeb(searchQuery); // Use SPECIFIC query!
-              
-              allFindings.push(...searchResult.findings);
-              sources.push(...searchResult.sources);
-              
-              emit('tool.result', {
-                tool: toolName,
-                findings_count: searchResult.findings.length,
-                key_insights: searchResult.summary
-    });
-  } catch (error: any) {
-              console.error('[Research] Web search error:', error);
-              emit('tool.result', {
-                tool: toolName,
-                findings_count: 0,
-                key_insights: `Search failed: ${error.message}`
-              });
-            }
-          } else {
-            emit('thinking', {
-              thought: 'External search not available. Skipping this step.',
-              thought_type: 'pivot'
-            });
+            break;
           }
           
-        } else if (action.includes('quality_check') || action.includes('evaluate')) {
-          // Quality assessment
-          emit('thinking', {
-            thought: 'Evaluating quality of research findings...',
-            thought_type: 'self_critique'
-          });
-          
-          try {
-            const qualityCheck = await assessFindingsQuality(allFindings, run.query);
-            
-            emit('thinking', {
-              thought: `Quality check: ${qualityCheck.score}/10. ${qualityCheck.reasoning}`,
-              thought_type: 'self_critique'
-            });
-            
-            // If quality is low and suggests more search, add to plan
-            if (qualityCheck.score < 6 && qualityCheck.nextAction === 'search_web_refined') {
-              emit('thinking', {
-                thought: 'Quality insufficient. Adding refined search to plan...',
-                thought_type: 'pivot'
-              });
+          case 'search_web': {
+            // Web search - use SPECIFIC query from tool parameters!
+            if (isOpenAIConfigured()) {
+              const searchQuery = toolCall.parameters.searchQuery || run.query;
               
-              researchPlan.steps.splice(i + 1, 0, 'search_web_refined: Search with more specific terms');
-              console.log('[Research] Plan adjusted: Added refined search step');
-            }
-  } catch (error: any) {
-            console.error('[Research] Quality check error:', error);
-          }
-          
-        } else if (action.includes('synthesize') || action.includes('combine')) {
-          // Synthesis step
-          emit('thinking', {
-            thought: `Synthesizing ${allFindings.length} findings from ${sources.length} sources...`,
-            thought_type: 'synthesis'
-          });
-          
-        } else if (action.includes('generate_chart') || action.includes('chart')) {
-          // Chart generation - do it NOW!
-          emit('thinking', {
-            thought: `Generating chart: ${description}`,
-            thought_type: 'synthesis'
-          });
-          
-          // Parse chart type from description
-          // Format: "generate_chart: bar - Market share comparison"
-          const chartTypeMatch = description.match(/(bar|line|pie|scatter|area|bubble|heatmap|radar|sankey|treemap|sunburst|funnel|candlestick|wordcloud)/i);
-          const chartType = chartTypeMatch ? chartTypeMatch[1].toLowerCase() : 'bar';
-          
-          // Find if user provided a specific goal for this chart type
-          const userChartGoal = chartRequests.find(cr => cr.type === chartType)?.goal;
-          
-          // Use description from plan OR user's goal OR default
-          const chartGoal = description || userChartGoal || `Create a ${chartType} chart that visualizes the key insights from this research: "${run.query}". Extract relevant data points, categories, and values from the findings.`;
-          
-          if (allFindings.length > 0) {
-            try {
               emit('tool.call', {
-                tool: 'chart_generator',
-                purpose: chartGoal
+                tool: 'search_web',
+                purpose: `Search: ${searchQuery}`
               });
               
-              const chartService = new ChartService();
-              const chartData = {
-                data: allFindings.join('\n'),
-                chartType: chartType as any,
-                title: `${run.query} - ${chartType} visualization`,
-                goal: chartGoal // Use the specific goal!
-              };
-              
-              console.log(`[Research] Generating ${chartType} chart from findings...`);
-              const chartResult = await chartService.generateChart(chartData);
-              
-              if (chartResult.success && chartResult.chart_url) {
-                chartUrls[chartType] = chartResult.chart_url;
-                console.log(`[Research] ${chartType} chart generated: ${chartResult.chart_url}`);
+              try {
+                console.log(`[Tool Execution] Executing search: "${searchQuery}"`);
+                const searchResult = await searchWeb(searchQuery);
+                
+                allFindings.push(...searchResult.findings);
+                sources.push(...searchResult.sources);
                 
                 emit('tool.result', {
-                  tool: 'chart_generator',
-                  findings_count: 1,
-                  key_insights: `${chartType} chart generated successfully`
+                  tool: 'search_web',
+                  findings_count: searchResult.findings.length,
+                  key_insights: searchResult.summary
                 });
-              } else {
-                console.warn(`[Research] ${chartType} chart generation failed:`, chartResult.error);
+              } catch (error: any) {
+                console.error('[Tool Execution] Web search error:', error);
                 emit('tool.result', {
-                  tool: 'chart_generator',
+                  tool: 'search_web',
                   findings_count: 0,
-                  key_insights: `${chartType} chart generation failed: ${chartResult.error || 'Unknown error'}`
+                  key_insights: `Search failed: ${error.message}`
                 });
               }
-            } catch (error: any) {
-              console.error(`[Research] Error generating ${chartType} chart:`, error);
-              emit('tool.result', {
-                tool: 'chart_generator',
-                findings_count: 0,
-                key_insights: `Error: ${error.message}`
+            } else {
+              emit('thinking', {
+                thought: 'External search not available (OpenAI not configured).',
+                thought_type: 'pivot'
               });
             }
-          } else {
-            emit('thinking', {
-              thought: 'No findings available yet for chart generation. Skipping.',
-              thought_type: 'pivot'
-            });
+            break;
           }
           
-        } else if (action.includes('write_report') || action.includes('final')) {
-          // Report writing (handled at the end)
-          emit('thinking', {
-            thought: 'Preparing final report with all findings...',
-            thought_type: 'writing'
-          });
+          case 'generate_chart': {
+            // Chart generation from tool parameters
+            emit('thinking', {
+              thought: `Generating ${toolCall.parameters.chartType} chart...`,
+              thought_type: 'synthesis'
+            });
+
+            
+            if (allFindings.length > 0) {
+              try {
+                const chartType = toolCall.parameters.chartType || 'bar';
+                const chartGoal = toolCall.parameters.goal || `Create a ${chartType} chart from research findings`;
+                
+                emit('tool.call', {
+                  tool: 'generate_chart',
+                  purpose: chartGoal
+                });
+                
+                const chartService = new ChartService();
+                const chartData = {
+                  data: allFindings.join('\n'),
+                  chartType: chartType as any,
+                  title: `${plan.understanding.coreSubject} - ${chartType} visualization`,
+                  goal: chartGoal
+                };
+                
+                console.log(`[Tool Execution] Generating ${chartType} chart...`);
+                const chartResult = await chartService.generateChart(chartData);
+                
+                if (chartResult.success && chartResult.chart_url) {
+                  chartUrls[chartType] = chartResult.chart_url;
+                  console.log(`[Tool Execution] ${chartType} chart generated: ${chartResult.chart_url}`);
+                  
+                  emit('tool.result', {
+                    tool: 'generate_chart',
+                    findings_count: 1,
+                    key_insights: `${chartType} chart generated successfully`
+                  });
+                } else {
+                  console.warn(`[Tool Execution] ${chartType} chart generation failed:`, chartResult.error);
+                  emit('tool.result', {
+                    tool: 'generate_chart',
+                    findings_count: 0,
+                    key_insights: `${chartType} chart generation failed: ${chartResult.error || 'Unknown error'}`
+                  });
+                }
+  } catch (error: any) {
+                console.error(`[Tool Execution] Error generating chart:`, error);
+                emit('tool.result', {
+                  tool: 'generate_chart',
+                  findings_count: 0,
+                  key_insights: `Error: ${error.message}`
+                });
+              }
+            } else {
+              emit('thinking', {
+                thought: 'No findings available yet for chart generation. Skipping.',
+                thought_type: 'pivot'
+              });
+            }
+            break;
+          }
           
-        } else {
-          // Unknown step - just acknowledge it
-          emit('thinking', {
-            thought: `Executing: ${step}`,
-            thought_type: 'executing'
-          });
+          case 'compile_report': {
+            // Report compilation - will be handled after loop
+            emit('thinking', {
+              thought: 'Preparing to compile final report...',
+              thought_type: 'writing'
+            });
+            // Store report parameters for later
+            break;
+          }
+          
+          default: {
+            // Unknown tool
+            emit('thinking', {
+              thought: `Executing tool: ${toolCall.tool}`,
+              thought_type: 'executing'
+            });
+          }
         }
         
-      } catch (error: any) {
-        console.error(`[Research] Error executing step "${step}":`, error);
+  } catch (error: any) {
+        console.error(`[Tool Execution] Error executing tool "${toolCall.tool}":`, error);
         emit('thinking', {
-          thought: `Step encountered an issue: ${error.message}. Continuing with next step.`,
+          thought: `Tool encountered an issue: ${error.message}. Continuing with next tool.`,
           thought_type: 'pivot'
         });
       }
@@ -1281,13 +1281,19 @@ Please try rephrasing your query or check API configuration.`;
     } else {
       // Try APIM synthesis with fallback
       try {
+        // Get compile_report tool parameters
+        const compileReportTool = plan.toolCalls.find(tc => tc.tool === 'compile_report');
+        const reportFormat = compileReportTool?.parameters.format || plan.understanding.outputFormat;
+        const reportSections = compileReportTool?.parameters.sections;
+        
         finalReport = await generateReport({
           query: run.query,
           depth: run.depth as any,
           fileFindings: uploadedFiles.length > 0 ? allFindings.filter(f => f.includes('From Uploaded Documents')) : undefined,
           webFindings: allFindings.filter(f => !f.includes('From Uploaded Documents')),
           sources,
-          reportSections: researchPlan.reportSections // NEW: Pass dynamic sections!
+          outputStyle: reportFormat as any,
+          reportSections: reportSections
     });
   } catch (error: any) {
         console.error('[Research] APIM report generation error:', error);
@@ -1339,9 +1345,9 @@ This ${run.depth}-depth research provides foundational information on the topic.
       metadata: {
         word_count: finalReport.split(/\s+/).length,
         duration_seconds: duration,
-        phase: 3, // Phase 3: True dynamic planning
-        plan_steps: researchPlan.steps.length,
-        plan_reasoning: researchPlan.reasoning,
+        phase: 4, // Phase 4: Tool-based planning
+        tools_executed: plan.toolCalls.length,
+        output_format: plan.understanding.outputFormat,
         files_analyzed: uploadedFiles.length,
         web_sources: sources.length,
         findings_count: allFindings.length,

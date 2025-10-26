@@ -821,6 +821,8 @@ REQUIREMENTS:
 
     console.log(`[ChartService] Calling APIM for chart: ${request.chartType}`);
     console.log(`[ChartService] User prompt length: ${prompt.length} chars`);
+      console.log('[ChartService] First 500 chars of prompt:', prompt.substring(0, 500));
+      console.log('[ChartService] Data type:', typeof this.buildFormatterPrompt(request).match(/Data:\n(.+)/)?.[1]);
     console.log(`[ChartService] System prompt length: ${systemPrompt.length} chars`);
 
     try {
