@@ -1027,26 +1027,30 @@ REQUIREMENTS:
       delete payload.values;
     }
     
-    // HEATMAP: Requires "data" (2D array), "xlabels", "ylabels"
+    // HEATMAP: Requires "x", "y", "values" (2D array)
     else if (type === 'heatmap') {
-      if (!payload.data || !Array.isArray(payload.data)) {
-        // Convert x/series format to 2D heatmap data
+      if (!payload.values || !Array.isArray(payload.values)) {
+        // Convert series format to 2D heatmap
         if (payload.series && payload.x) {
-          const numRows = payload.series.length;
-          const numCols = payload.x.length;
-          payload.data = payload.series.map((s: any) => s.values || []);
-          payload.xlabels = payload.x;
-          payload.ylabels = payload.series.map((s: any) => s.name || 'Row');
-          console.log('[ChartService] Fixed heatmap: converted series to 2D data');
+          payload.values = payload.series.map((s: any) => s.values || []);
+          payload.y = payload.series.map((s: any) => s.name || 'Row');
+          // Keep payload.x as is
+          console.log('[ChartService] Fixed heatmap: converted series to 2D values');
         } else {
-          payload.data = [[10, 20, 30], [40, 50, 60], [70, 80, 90]];
-          payload.xlabels = ['A', 'B', 'C'];
-          payload.ylabels = ['X', 'Y', 'Z'];
-          console.log('[ChartService] Fixed heatmap: added fallback data');
+          payload.values = [[10, 20, 30], [40, 50, 60], [70, 80, 90]];
+          payload.x = ['A', 'B', 'C'];
+          payload.y = ['X', 'Y', 'Z'];
+          console.log('[ChartService] Fixed heatmap: added fallback values');
         }
+        delete payload.series;
       }
-      delete payload.x;
-      delete payload.series;
+      // Clean up alternative naming if present
+      if (payload.data && !payload.values) payload.values = payload.data;
+      if (payload.xlabels && !payload.x) payload.x = payload.xlabels;
+      if (payload.ylabels && !payload.y) payload.y = payload.ylabels;
+      delete payload.data;
+      delete payload.xlabels;
+      delete payload.ylabels;
     }
     
     // SANKEY: Requires "nodes" and "links"
@@ -1446,9 +1450,11 @@ REQUIREMENTS:
   Note: Values must be positive. Creates squarified rectangles with group-based colors and white gutters.`,
 
       candlestick: `CANDLESTICK:
-  keys: title?, x[string[]], ohlc[{x, open, high, low, close}], options?
-  options keys: width, height, dpi, grid(bool default true), label_rotation(int default 0), y_axis{min, max, tick_step}, candle_width(float default 0.55), color_up(hex default "#10B981"), color_down(hex default "#EF4444"), wick_linewidth(float default 2.0), body_linewidth(float default 0.0).
-  Note: Each ohlc.x must be present in x array. OHLC values must satisfy low ≤ open/close ≤ high. Creates green up candles and red down candles.`,
+  keys: title?, data[{date, open, high, low, close}], options?
+  Required structure:
+  - data: Array of OHLC values with date (string), open (number), high (number), low (number), close (number)
+  - Constraint: low ≤ open/close ≤ high
+  Example: {data: [{date:"2024-01", open:100, high:110, low:95, close:105}]}`,
 
       flow: `FLOW:
   keys: title?, nodes[{id, label, type}], edges[{from, to}], options?
@@ -1635,6 +1641,19 @@ Required JSON structure:
     "height": 600
   }
 }`;
+    } else if (chartType === 'candlestick') {
+      prompt += `Create a candlestick/OHLC chart showing price movements over time.
+
+Required JSON structure:
+{
+  "title": "chart title",
+  "data": [
+    {"date": "2024-01", "open": 100, "high": 110, "low": 95, "close": 105},
+    {"date": "2024-02", "open": 105, "high": 115, "low": 100, "close": 110}
+  ]
+}
+
+Note: Ensure low ≤ open/close ≤ high for each candle.`;
     } else {
       // Standard chart structure
       prompt += `Return the formatted JSON payload for the ${chartType} chart with the following requirements:
