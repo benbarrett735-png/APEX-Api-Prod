@@ -12,11 +12,76 @@ import { searchWeb, isOpenAIConfigured } from '../services/openaiSearch.js';
 import { getMultipleFiles, combineFileContents } from '../services/fileRetrieval.js';
 import { generateReport, generateSectionSummary } from '../services/reportGenerator.js';
 import { ChartService } from '../services/chartService.js';
+import { callAPIM } from '../services/agenticFlow.js';
 
 const router = Router();
 
 // Apply auth middleware to all routes
 router.use(requireAuth);
+
+/**
+ * o1-Style Quality Assessment
+ * Evaluates research findings and suggests improvements
+ */
+async function assessFindingsQuality(findings: string[], query: string): Promise<{
+  score: number;
+  reasoning: string;
+  suggestedQuery?: string;
+  shouldExpand: boolean;
+}> {
+  if (findings.length === 0) {
+    return {
+      score: 0,
+      reasoning: 'No findings collected',
+      suggestedQuery: query,
+      shouldExpand: true
+    };
+  }
+  
+  try {
+    const messages = [
+      { role: 'system', content: 'You are a research quality evaluator. Assess if findings adequately answer the query.' },
+      { role: 'user', content: `Query: "${query}"
+
+Findings (${findings.length} total):
+${findings.slice(0, 5).map((f, i) => `${i + 1}. ${f.substring(0, 200)}...`).join('\n\n')}
+
+Evaluate:
+1. Do these findings answer the query comprehensively?
+2. Quality score (1-10)
+3. Should we search for more/different information?
+4. If yes, what refined query would work better?
+
+Respond with ONLY valid JSON:
+{
+  "score": 1-10,
+  "reasoning": "brief explanation",
+  "suggested_query": "refined query if needed",
+  "should_expand": true/false
+}` }
+    ];
+    
+    const response = await callAPIM(messages);
+    
+    // Parse JSON from response
+    const jsonMatch = response.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      console.warn('[Quality Assessment] Could not parse APIM response');
+      return { score: 7, reasoning: 'Assessment unavailable', shouldExpand: false };
+    }
+    
+    const assessment = JSON.parse(jsonMatch[0]);
+    return {
+      score: assessment.score || 7,
+      reasoning: assessment.reasoning || 'Quality assessment complete',
+      suggestedQuery: assessment.suggested_query,
+      shouldExpand: assessment.should_expand || false
+    };
+  } catch (error: any) {
+    console.error('[Quality Assessment] Error:', error);
+    return { score: 7, reasoning: 'Assessment failed, proceeding', shouldExpand: false };
+  }
+}
 
 // ============================================================================
 // Types
@@ -357,6 +422,55 @@ router.get('/stream/:id', async (req, res) => {
           findings_count: searchResult.findings.length,
           key_insights: searchResult.summary
         });
+        
+        // Phase 3: o1-Style Self-Critique
+        emit('thinking', {
+          thought: 'Evaluating quality of research findings...',
+          thought_type: 'self_critique'
+        });
+        
+        const qualityCheck = await assessFindingsQuality(allFindings, run.query);
+        
+        if (qualityCheck.score < 6 && qualityCheck.shouldExpand) {
+          emit('thinking', {
+            thought: `Research quality: ${qualityCheck.score}/10. ${qualityCheck.reasoning}. Let me try a different approach...`,
+            thought_type: 'self_critique'
+          });
+          
+          emit('thinking', {
+            thought: `Pivoting strategy: Using more specific search terms to improve results.`,
+            thought_type: 'pivot'
+          });
+          
+          // Pivot: Try refined search
+          try {
+            const refinedQuery = qualityCheck.suggestedQuery || run.query;
+            
+            emit('tool.call', {
+              tool: 'openai_search_refined',
+              purpose: `Refined search with better query: "${refinedQuery.substring(0, 50)}..."`
+            });
+            
+            const refinedSearch = await searchWeb(refinedQuery);
+            allFindings.push(...refinedSearch.findings);
+            sources.push(...refinedSearch.sources);
+            
+            emit('tool.result', {
+              tool: 'openai_search_refined',
+              findings_count: refinedSearch.findings.length,
+              key_insights: `Refined search found ${refinedSearch.findings.length} additional items`
+            });
+            
+            console.log(`[Research] Refined search complete: ${refinedSearch.findings.length} additional findings`);
+          } catch (error: any) {
+            console.error('[Research] Refined search error:', error);
+          }
+        } else {
+          emit('thinking', {
+            thought: `Quality check: ${qualityCheck.score}/10. ${qualityCheck.reasoning}. Proceeding to synthesis.`,
+            thought_type: 'self_critique'
+          });
+        }
         
       } catch (error: any) {
         console.error('[Research] OpenAI search error:', error);

@@ -10,7 +10,7 @@ import { query as dbQuery } from '../db/query.js';
 // APIM Helper - Direct calls to APIM
 // ============================================================================
 
-async function callAPIM(messages: any[], stream = false): Promise<any> {
+export async function callAPIM(messages: any[], stream = false): Promise<any> {
   const APIM_HOST = process.env.APIM_HOST;
   const APIM_SUBSCRIPTION_KEY = process.env.APIM_SUBSCRIPTION_KEY;
   const APIM_OPERATION = process.env.APIM_OPERATION || '/chat/strong';
