@@ -824,6 +824,10 @@ REQUIREMENTS:
     console.log(`[ChartService] System prompt length: ${systemPrompt.length} chars`);
 
     try {
+      // Add timeout to prevent hanging
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+
       const response = await fetch(`${this.apimHost}${operation}`, {
         method: 'POST',
         headers: {
@@ -844,8 +848,11 @@ REQUIREMENTS:
           stream: false,
           max_completion_tokens: 2000,
           model: 'gpt-4o'
-        })
+        }),
+        signal: controller.signal
       });
+
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -879,6 +886,10 @@ REQUIREMENTS:
       return payload;
 
     } catch (error: any) {
+      if (error.name === 'AbortError') {
+        console.error('[ChartService] APIM request timed out after 30s');
+        throw new Error('Chart generation timed out - APIM took too long to respond');
+      }
       console.error('[ChartService] APIM formatting failed:', error);
       console.error('[ChartService] Chart type:', request.chartType);
       console.error('[ChartService] User goal:', request.goal);
@@ -1786,6 +1797,17 @@ Required JSON structure:
       
       let stdout = '';
       let stderr = '';
+      let isResolved = false;
+      
+      // Add timeout to prevent hanging Python scripts
+      const timeoutId = setTimeout(() => {
+        if (!isResolved) {
+          isResolved = true;
+          pythonProcess.kill('SIGTERM');
+          console.error('[ChartService] Python execution timed out after 60s');
+          reject(new Error('Chart generation timed out - Python script took too long'));
+        }
+      }, 60000); // 60 second timeout for Python execution
       
       pythonProcess.stdout.on('data', (data) => {
         stdout += data.toString();
@@ -1796,6 +1818,10 @@ Required JSON structure:
       });
       
       pythonProcess.on('close', (code) => {
+        if (isResolved) return; // Already timed out
+        isResolved = true;
+        clearTimeout(timeoutId);
+        
         if (code !== 0) {
           console.error('[ChartService] Python execution failed:', stderr);
           reject(new Error(`Python execution failed: ${stderr}`));
@@ -1806,6 +1832,9 @@ Required JSON structure:
       });
       
       pythonProcess.on('error', (error) => {
+        if (isResolved) return; // Already timed out
+        isResolved = true;
+        clearTimeout(timeoutId);
         console.error('[ChartService] Failed to start Python process:', error);
         reject(error);
       });
