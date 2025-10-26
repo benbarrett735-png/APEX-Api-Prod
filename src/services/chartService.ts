@@ -909,18 +909,30 @@ REQUIREMENTS:
       }
     }
     
-    // TREEMAP: Requires "root" with nested children
+    // TREEMAP: Requires "items" array with [{label, value, group}]
     else if (type === 'treemap') {
-      if (!payload.root) {
-        payload.root = {
-          name: 'Total',
-          children: [
-            { name: 'Category A', value: 400 },
-            { name: 'Category B', value: 300 },
-            { name: 'Category C', value: 200 }
-          ]
-        };
-        console.log('[ChartService] Fixed treemap: added root');
+      // If APIM returned "root" structure (wrong), convert to items
+      if (payload.root && !payload.items) {
+        const rootNode = payload.root;
+        if (rootNode.children && Array.isArray(rootNode.children)) {
+          payload.items = rootNode.children.map((child: any) => ({
+            label: child.name || child.label,
+            value: child.value || 100,
+            group: child.group || 'Default'
+          }));
+          console.log('[ChartService] Fixed treemap: converted root.children to items');
+        }
+        delete payload.root;
+      }
+      
+      // If still no items, create fallback
+      if (!payload.items) {
+        payload.items = [
+          { label: 'Category A', value: 400, group: 'Group 1' },
+          { label: 'Category B', value: 300, group: 'Group 1' },
+          { label: 'Category C', value: 200, group: 'Group 2' }
+        ];
+        console.log('[ChartService] Fixed treemap: added fallback items');
       }
     }
     
