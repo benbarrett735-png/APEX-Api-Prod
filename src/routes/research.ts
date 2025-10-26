@@ -20,37 +20,149 @@ const router = Router();
 router.use(requireAuth);
 
 /**
+ * o1-Style Understanding Phase
+ * FIRST: Deeply understand what the user wants before planning
+ */
+async function understandUserIntent(
+  query: string,
+  documentContext?: string,
+  includeCharts?: string[]
+): Promise<{
+  coreSubject: string;
+  userGoal: string;
+  keyTopics: string[];
+  chartDataNeeds?: string[];
+}> {
+  try {
+    const messages = [
+      {
+        role: 'system',
+        content: `You are an intelligent research analyst. Your job is to DEEPLY UNDERSTAND what the user wants before we start research.
+
+CRITICAL: Read carefully and identify the ACTUAL subject. Don't get confused by common words.
+
+Example mistakes to avoid:
+- User asks about "Cabot's Cookery School" → DON'T search for "comprehensive research methodology"
+- User asks about "Apple products" → DON'T search for "fruit nutrition"
+- User asks about "Twitter strategy" → DON'T search for "bird behavior"`
+      },
+      {
+        role: 'user',
+        content: `Analyze this research request and tell me EXACTLY what the user wants to know:
+
+Query: "${query}"
+
+${documentContext ? `Document Content (first 2000 chars):
+${documentContext.substring(0, 2000)}
+
+IMPORTANT: This document provides context about the ACTUAL subject. Use it to understand what they're asking about!` : ''}
+
+${includeCharts && includeCharts.length > 0 ? `Charts Requested: ${includeCharts.join(', ')}
+
+IMPORTANT: These charts mean the user needs QUANTITATIVE DATA. Plan to find numbers, statistics, trends.` : ''}
+
+Respond with ONLY valid JSON:
+{
+  "coreSubject": "The MAIN thing the user is asking about (be specific!)",
+  "userGoal": "What they want to achieve with this research",
+  "keyTopics": ["Topic 1", "Topic 2", "Topic 3"...] // Specific topics to research
+  ${includeCharts && includeCharts.length > 0 ? ', "chartDataNeeds": ["Data type 1", "Data type 2"...] // What data is needed for the charts' : ''}
+}
+
+Example 1 - Cookery School:
+Query: "What are Cabot's market opportunities?"
+Document: "Cabot's Cookery School is a family-run sustainable cookery school..."
+
+Response:
+{
+  "coreSubject": "Cabot's Cookery School (a cooking school business)",
+  "userGoal": "Identify market opportunities and growth strategies for the cookery school",
+  "keyTopics": [
+    "Cookery school market size and trends",
+    "Competitors in culinary education",
+    "Customer segments for cooking classes",
+    "Marketing channels for cooking schools",
+    "Pricing strategies for culinary courses"
+  ]
+}
+
+Example 2 - Tech Comparison with Charts:
+Query: "Compare React vs Vue"
+Charts: bar, line
+
+Response:
+{
+  "coreSubject": "React and Vue JavaScript frameworks",
+  "userGoal": "Compare the two frameworks to help choose one",
+  "keyTopics": [
+    "React features and performance 2024",
+    "Vue features and performance 2024", 
+    "Developer experience comparison",
+    "Ecosystem and community size",
+    "Job market demand"
+  ],
+  "chartDataNeeds": [
+    "Market share statistics",
+    "Performance benchmarks (load time, bundle size)",
+    "GitHub stars/contributors over time",
+    "Job posting counts by framework"
+  ]
+}`
+      }
+    ];
+
+    const response = await callAPIM(messages);
+    const jsonMatch = response.match(/\{[\s\S]*\}/);
+    
+    if (!jsonMatch) {
+      console.warn('[Understanding] Could not parse APIM response');
+      return {
+        coreSubject: query,
+        userGoal: 'Research the topic',
+        keyTopics: [query]
+      };
+    }
+
+    const understanding = JSON.parse(jsonMatch[0]);
+    console.log('[Understanding] User intent:', understanding);
+    return understanding;
+
+  } catch (error: any) {
+    console.error('[Understanding] Error:', error);
+    return {
+      coreSubject: query,
+      userGoal: 'Research the topic',
+      keyTopics: [query]
+    };
+  }
+}
+
+/**
  * o1-Style Dynamic Plan Creation
- * Creates a real execution plan that will be followed step-by-step
- * NOW: Uses document content to inform search queries
+ * SECOND: Create a detailed, specific plan based on understanding
  */
 async function createResearchPlan(
   query: string,
   depth: string,
+  understanding: any, // Result from understandUserIntent
   hasFiles: boolean,
-  includeCharts: string[],
-  documentContext?: string, // NEW: Actual document content
-  chartGoals?: string[] // NEW: What user wants charts to show
+  includeCharts: string[]
 ): Promise<{ steps: string[]; reasoning: string; reportSections?: string[] }> {
   try {
-    // Build context for plan creation
-    let contextInfo = `Query: "${query}"
+    // Build context using UNDERSTANDING
+    let contextInfo = `UNDERSTANDING (what the user ACTUALLY wants):
+Core Subject: ${understanding.coreSubject}
+User Goal: ${understanding.userGoal}
+Key Topics to Research: ${understanding.keyTopics.join(', ')}
+
+Query: "${query}"
 Depth: ${depth}
 Has uploaded files: ${hasFiles}
 Requested charts: ${includeCharts.length > 0 ? includeCharts.join(', ') : 'none'}`;
 
-    if (documentContext) {
-      contextInfo += `\n\nDocument Content Preview (first 1000 chars):
-${documentContext.substring(0, 1000)}...
-
-IMPORTANT: Use this document content to create SPECIFIC search queries that will complement it!`;
-    }
-
-    if (chartGoals && chartGoals.length > 0) {
-      contextInfo += `\n\nChart Goals (what user wants visualized):
-${chartGoals.join('\n')}
-
-IMPORTANT: Research should gather data that can support these visualizations!`;
+    if (understanding.chartDataNeeds && understanding.chartDataNeeds.length > 0) {
+      contextInfo += `\n\nChart Data Needs: ${understanding.chartDataNeeds.join(', ')}
+CRITICAL: You MUST include steps to generate these charts!`;
     }
     
     const messages = [
@@ -58,12 +170,13 @@ IMPORTANT: Research should gather data that can support these visualizations!`;
         role: 'system', 
         content: `You are a research planner. Create a comprehensive, specific step-by-step research plan.
 
-KEY PRINCIPLES:
-1. If document content is provided, create TARGETED searches based on what's in it
-2. Make multiple specific searches (3-5 searches for comprehensive depth)
-3. Each search should target a DIFFERENT aspect (don't repeat)
-4. If charts requested, plan searches that will gather data for them
-5. Report sections should be dynamic based on the query type` 
+CRITICAL PRINCIPLES:
+1. Use the UNDERSTANDING to create searches about the CORE SUBJECT (not related words!)
+2. Make multiple specific searches (${depth === 'comprehensive' ? '4-6' : depth === 'long' ? '3-5' : depth === 'medium' ? '3-4' : '2-3'} searches)
+3. Each search targets a DIFFERENT aspect of the CORE SUBJECT
+4. If charts requested, you MUST include "generate_chart: {type}" steps
+5. If chart data needs specified, searches MUST target that data
+6. Report sections adapt to the research type` 
       },
       { 
         role: 'user', 
@@ -96,34 +209,42 @@ Respond with ONLY valid JSON:
   "reportSections": ["Section 1", "Section 2", ...] // Dynamic sections for the report
 }
 
-Example for "Compare React vs Vue" with no files:
+Example 1 - Cookery School (file uploaded, NO charts):
+Understanding: Core Subject = "Cabot's Cookery School (cooking school business)"
 {
   "steps": [
-    "search_web: React 18 latest features, performance benchmarks, and ecosystem size 2024",
-    "search_web: Vue 3 Composition API, performance metrics, and community adoption 2024",
-    "search_web: Head-to-head comparison React vs Vue developer experience and job market",
-    "quality_check: Verify balanced coverage of both frameworks",
-    "synthesize: Compare features, performance, ecosystem, use cases",
-    "write_report: Create comparative analysis with recommendations"
+    "analyze_files: Extract Cabot's Cookery School current offerings, location, unique features",
+    "search_web: Cooking school market trends UK/Ireland 2024, customer demographics",
+    "search_web: Successful cooking school marketing strategies, digital presence best practices",
+    "search_web: Culinary tourism trends, experience-based learning demand",
+    "quality_check: Verify we have business + market perspective",
+    "synthesize: Combine school's strengths with market opportunities",
+    "write_report: Present growth recommendations for cookery school"
   ],
-  "reasoning": "Comparison requires detailed, balanced information from multiple angles",
-  "reportSections": ["Overview", "React Analysis", "Vue Analysis", "Head-to-Head Comparison", "Recommendations", "Conclusion"]
+  "reasoning": "Cookery school business needs market context, marketing insights, and tourism trends",
+  "reportSections": ["Current Position", "Market Landscape", "Marketing Opportunities", "Growth Strategies"]
 }
 
-Example for document + query "What are Cabot's market opportunities?":
+Example 2 - Tech with Charts:
+Understanding: Core Subject = "React vs Vue", Chart Data Needs = "Market share, Performance benchmarks"
+Charts requested: bar, line
 {
   "steps": [
-    "analyze_files: Extract current business model, products, and stated goals from document",
-    "search_web: Cabot Corporation market size, competitors, and industry trends 2024",
-    "search_web: Emerging opportunities in Cabot's industry segments",
-    "search_web: Recent strategic moves by Cabot and competitors",
-    "quality_check: Verify we have internal + external perspective",
-    "synthesize: Combine document insights with market intelligence",
-    "write_report: Present opportunity analysis with data"
+    "search_web: React 18 market share statistics, npm downloads, GitHub stars 2024",
+    "search_web: Vue 3 market share statistics, npm downloads, adoption metrics 2024",
+    "search_web: React vs Vue performance benchmarks, load times, bundle sizes",
+    "search_web: Developer experience surveys, job market demand by framework",
+    "quality_check: Verify balanced quantitative data for both",
+    "synthesize: Compare all metrics",
+    "generate_chart: bar - Market share and adoption comparison",
+    "generate_chart: line - Performance metrics comparison",
+    "write_report: Present comparison with data visualizations"
   ],
-  "reasoning": "Document provides internal view, web searches provide market context and opportunities",
-  "reportSections": ["Current Position (from document)", "Market Landscape", "Competitive Analysis", "Opportunities", "Strategic Recommendations"]
-}`
+  "reasoning": "Comparison needs quantitative data for charts, multiple search angles for comprehensive view",
+  "reportSections": ["Overview", "Adoption Metrics", "Performance Analysis", "Developer Experience", "Recommendation"]
+}
+
+CRITICAL: If charts requested, you MUST include "generate_chart: {type}" steps!`
       }
     ];
     
@@ -491,9 +612,10 @@ router.get('/stream/:id', async (req, res) => {
     const startTime = Date.now();
     console.log('[Research] Starting o1-style research with dynamic planning...');
     
-    // Track all findings
+    // Track all findings and charts
     const allFindings: string[] = [];
     const sources: string[] = [];
+    const chartUrls: Record<string, string> = {}; // Charts generated during execution
     let documentAnalysisResult: string | null = null;
     
     // Parse uploaded files and chart requests
@@ -515,47 +637,72 @@ router.get('/stream/:id', async (req, res) => {
       ? run.include_charts
       : (run.include_charts ? JSON.parse(run.include_charts) : []);
     
-    // Step 1: Extract document content if files uploaded (for plan creation)
+    // ========================================================================
+    // STEP 1: UNDERSTAND (like o1 thinking - deeply understand first!)
+    // ========================================================================
+    
+    emit('thinking', {
+      thought: 'Phase 1: Understanding your request...',
+      thought_type: 'analyzing'
+    });
+    
+    // Extract document content if files uploaded
     let documentContext: string | undefined;
-    let chartGoals: string[] | undefined;
     
     if (uploadedFiles.length > 0) {
-      emit('thinking', {
-        thought: 'Extracting document content to inform research plan...',
-        thought_type: 'analyzing'
-      });
-      
       const filesWithContent = uploadedFiles.filter((f: any) => f.content && f.content.trim().length > 0) as UploadedFile[];
       
       if (filesWithContent.length > 0) {
-        // Combine document content for plan creation
         documentContext = filesWithContent
           .map((f: UploadedFile) => `[${f.fileName}]\n${f.content}`)
           .join('\n\n---\n\n')
-          .substring(0, 4000); // First 4000 chars for plan context
+          .substring(0, 4000); // First 4000 chars for understanding
         
         console.log(`[Research] Document context extracted: ${documentContext.length} chars`);
       }
     }
     
-    // Extract chart goals if charts requested
-    if (includeCharts.length > 0) {
-      chartGoals = includeCharts.map(type => `Create ${type} chart to visualize key research findings`);
+    // FIRST: Deeply understand what the user wants (o1-style)
+    const understanding = await understandUserIntent(
+      run.query,
+      documentContext,
+      includeCharts
+    );
+    
+    console.log('[Research] Understanding:', understanding);
+    
+    emit('thinking', {
+      thought: `Understanding confirmed: Researching "${understanding.coreSubject}" to ${understanding.userGoal}`,
+      thought_type: 'analyzing'
+    });
+    
+    emit('thinking', {
+      thought: `Key topics identified: ${understanding.keyTopics.slice(0, 3).join(', ')}${understanding.keyTopics.length > 3 ? '...' : ''}`,
+      thought_type: 'analyzing'
+    });
+    
+    if (understanding.chartDataNeeds && understanding.chartDataNeeds.length > 0) {
+      emit('thinking', {
+        thought: `Chart data requirements: ${understanding.chartDataNeeds.join(', ')}`,
+        thought_type: 'planning'
+      });
     }
     
-    // Step 2: Create Dynamic Research Plan using APIM (with document context!)
+    // ========================================================================
+    // STEP 2: PLAN (create detailed execution plan based on understanding)
+    // ========================================================================
+    
     emit('thinking', {
-      thought: 'Analyzing your query' + (documentContext ? ' and document content' : '') + ' to create a tailored research plan...',
+      thought: 'Phase 2: Creating comprehensive research plan...',
       thought_type: 'planning'
     });
     
     const researchPlan = await createResearchPlan(
       run.query,
       run.depth,
+      understanding, // Pass understanding!
       uploadedFiles.length > 0,
-      includeCharts,
-      documentContext, // NEW: Pass document content!
-      chartGoals // NEW: Pass chart goals!
+      includeCharts
     );
     
     console.log('[Research] Plan created:', researchPlan);
@@ -571,7 +718,15 @@ router.get('/stream/:id', async (req, res) => {
       thought_type: 'planning'
     });
     
-    // Step 2: Execute the plan step-by-step
+    // ========================================================================
+    // STEP 3: EXECUTE (follow the plan step-by-step)
+    // ========================================================================
+    
+    emit('thinking', {
+      thought: 'Phase 3: Executing research plan...',
+      thought_type: 'executing'
+    });
+    
     for (let i = 0; i < researchPlan.steps.length; i++) {
       const step = researchPlan.steps[i];
       console.log(`[Research] Executing step ${i + 1}/${researchPlan.steps.length}: ${step}`);
@@ -667,8 +822,8 @@ router.get('/stream/:id', async (req, res) => {
                 tool: toolName,
                 findings_count: searchResult.findings.length,
                 key_insights: searchResult.summary
-              });
-            } catch (error: any) {
+    });
+  } catch (error: any) {
               console.error('[Research] Web search error:', error);
               emit('tool.result', {
                 tool: toolName,
@@ -720,11 +875,66 @@ router.get('/stream/:id', async (req, res) => {
           });
           
         } else if (action.includes('generate_chart') || action.includes('chart')) {
-          // Chart generation (handled later in batch)
+          // Chart generation - do it NOW!
           emit('thinking', {
-            thought: `Chart generation scheduled: ${description}`,
-            thought_type: 'planning'
+            thought: `Generating chart: ${description}`,
+            thought_type: 'synthesis'
           });
+          
+          // Parse chart type from description
+          // Format: "generate_chart: bar - Market share comparison"
+          const chartTypeMatch = description.match(/(bar|line|pie|scatter|area|bubble|heatmap|radar)/i);
+          const chartType = chartTypeMatch ? chartTypeMatch[1].toLowerCase() : 'bar';
+          
+          if (allFindings.length > 0) {
+            try {
+              emit('tool.call', {
+                tool: 'chart_generator',
+                purpose: description || `Generate ${chartType} chart from research data`
+              });
+              
+              const chartService = new ChartService();
+              const chartData = {
+                data: allFindings.join('\n'),
+                chartType: chartType as any,
+                title: `${run.query} - ${chartType} visualization`,
+                goal: description || `Create a ${chartType} chart that visualizes the key insights from this research: "${run.query}". Extract relevant data points, categories, and values from the findings.`
+              };
+              
+              console.log(`[Research] Generating ${chartType} chart from findings...`);
+              const chartResult = await chartService.generateChart(chartData);
+              
+              if (chartResult.success && chartResult.chart_url) {
+                chartUrls[chartType] = chartResult.chart_url;
+                console.log(`[Research] ${chartType} chart generated: ${chartResult.chart_url}`);
+                
+                emit('tool.result', {
+                  tool: 'chart_generator',
+                  findings_count: 1,
+                  key_insights: `${chartType} chart generated successfully`
+                });
+              } else {
+                console.warn(`[Research] ${chartType} chart generation failed:`, chartResult.error);
+                emit('tool.result', {
+                  tool: 'chart_generator',
+                  findings_count: 0,
+                  key_insights: `${chartType} chart generation failed: ${chartResult.error || 'Unknown error'}`
+                });
+              }
+            } catch (error: any) {
+              console.error(`[Research] Error generating ${chartType} chart:`, error);
+              emit('tool.result', {
+                tool: 'chart_generator',
+                findings_count: 0,
+                key_insights: `Error: ${error.message}`
+              });
+            }
+          } else {
+            emit('thinking', {
+              thought: 'No findings available yet for chart generation. Skipping.',
+              thought_type: 'pivot'
+            });
+          }
           
         } else if (action.includes('write_report') || action.includes('final')) {
           // Report writing (handled at the end)
@@ -750,73 +960,11 @@ router.get('/stream/:id', async (req, res) => {
       }
     }
     
-    // Step 3: Generate charts (if requested)
+    // Charts already generated during execution (if plan included generate_chart steps)
     emit('thinking', {
-      thought: 'Plan execution complete. Generating outputs...',
+      thought: 'Plan execution complete. Finalizing report...',
       thought_type: 'synthesis'
     });
-    const chartUrls: Record<string, string> = {};
-    
-    if (includeCharts.length > 0 && allFindings.length > 0) {
-      emit('thinking', {
-        thought: `Generating ${includeCharts.length} chart${includeCharts.length > 1 ? 's' : ''} to visualize research findings...`,
-        thought_type: 'synthesis'
-      });
-      
-      const chartService = new ChartService();
-      
-      for (const chartType of includeCharts) {
-        try {
-          emit('tool.call', {
-            tool: 'chart_generator',
-            purpose: `Generate ${chartType} chart from research data`
-          });
-          
-          // Extract chart-worthy data from findings
-          const chartData = {
-            data: allFindings.join('\n'),
-            chartType: chartType as any,
-            title: `${run.query} - ${chartType} visualization`,
-            goal: `Create a ${chartType} chart that visualizes the key insights from this research: "${run.query}". Extract relevant data points, categories, and values from the findings.`
-          };
-          
-          console.log(`[Research] Generating ${chartType} chart...`);
-          const chartResult = await chartService.generateChart(chartData);
-          
-          if (chartResult.success && chartResult.chart_url) {
-            chartUrls[chartType] = chartResult.chart_url;
-            console.log(`[Research] ${chartType} chart generated: ${chartResult.chart_url}`);
-            
-            emit('tool.result', {
-              tool: 'chart_generator',
-              findings_count: 1,
-              key_insights: `${chartType} chart generated successfully`
-            });
-          } else {
-            console.warn(`[Research] ${chartType} chart generation failed:`, chartResult.error);
-            emit('tool.result', {
-              tool: 'chart_generator',
-              findings_count: 0,
-              key_insights: `${chartType} chart generation failed`
-            });
-          }
-  } catch (error: any) {
-          console.error(`[Research] Error generating ${chartType} chart:`, error);
-          emit('tool.result', {
-            tool: 'chart_generator',
-            findings_count: 0,
-            key_insights: `Error: ${error.message}`
-          });
-        }
-      }
-      
-      if (Object.keys(chartUrls).length > 0) {
-        emit('thinking', {
-          thought: `Successfully generated ${Object.keys(chartUrls).length} chart${Object.keys(chartUrls).length > 1 ? 's' : ''}. Including in final report.`,
-          thought_type: 'synthesis'
-        });
-      }
-    }
     
     // Step 4: Generate section previews
     if (allFindings.length > 0) {
@@ -874,7 +1022,7 @@ Please try rephrasing your query or check API configuration.`;
           webFindings: allFindings.filter(f => !f.includes('From Uploaded Documents')),
           sources,
           reportSections: researchPlan.reportSections // NEW: Pass dynamic sections!
-        });
+    });
   } catch (error: any) {
         console.error('[Research] APIM report generation error:', error);
         
