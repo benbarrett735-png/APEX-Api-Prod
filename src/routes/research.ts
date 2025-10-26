@@ -381,22 +381,70 @@ router.get('/stream/:id', async (req, res) => {
     });
     
     // Phase 2A: Process uploaded files (if any)
-    // NOTE: Currently Portal doesn't send file content, only IDs
-    // File processing will be skipped until Portal integration is updated
     if (uploadedFiles.length > 0) {
       emit('thinking', {
-        thought: `Found ${uploadedFiles.length} uploaded file(s) mentioned. Note: File content processing coming soon - proceeding with web research for now.`,
-        thought_type: 'planning'
+        thought: `Analyzing ${uploadedFiles.length} uploaded document${uploadedFiles.length > 1 ? 's' : ''}...`,
+        thought_type: 'analyzing'
       });
       
-      console.log('[Research] Files were uploaded but content not available yet:', uploadedFiles);
-      console.log('[Research] TODO: Update Portal to send file content or implement file storage');
+      // Check if files have content (ADI-extracted)
+      const filesWithContent = uploadedFiles.filter(f => f.content && f.content.trim().length > 0);
       
-      // Skip file processing for now, go straight to web search
-      emit('thinking', {
-        thought: 'Proceeding with external web research to answer your query.',
-        thought_type: 'planning'
-      });
+      if (filesWithContent.length > 0) {
+        emit('tool.call', {
+          tool: 'document_analysis',
+          purpose: `Analyze ${filesWithContent.length} uploaded document${filesWithContent.length > 1 ? 's' : ''}`
+        });
+        
+        try {
+          // Combine all file contents
+          const combinedContent = filesWithContent
+            .map(f => `### ${f.fileName}\n\n${f.content}`)
+            .join('\n\n---\n\n');
+          
+          console.log(`[Research] Processing ${filesWithContent.length} files with content (${combinedContent.length} chars total)`);
+          
+          // Use APIM to extract key findings from documents
+          const documentAnalysis = await generateSectionSummary(
+            'Document Analysis', 
+            [`Extracted content from ${filesWithContent.length} document(s):\n\n${combinedContent.substring(0, 8000)}`]
+          );
+          
+          // Extract findings from analysis
+          const documentFindings = documentAnalysis
+            .split('\n')
+            .filter(line => line.trim().length > 20 && !line.startsWith('#'))
+            .map(line => `[From Uploaded Documents] ${line.trim()}`)
+            .slice(0, 10); // Top 10 findings from documents
+          
+          allFindings.push(...documentFindings);
+          sources.push(...filesWithContent.map(f => `Uploaded: ${f.fileName}`));
+          
+          emit('tool.result', {
+            tool: 'document_analysis',
+            findings_count: documentFindings.length,
+            key_insights: `Extracted ${documentFindings.length} key insights from uploaded documents`
+          });
+          
+          emit('thinking', {
+            thought: `Extracted ${documentFindings.length} key findings from your uploaded documents. Let me complement this with external research.`,
+            thought_type: 'analyzing'
+          });
+        } catch (error: any) {
+          console.error('[Research] Document analysis error:', error);
+          emit('tool.result', {
+            tool: 'document_analysis',
+            findings_count: 0,
+            key_insights: `Analysis failed: ${error.message}. Proceeding with web research.`
+          });
+        }
+      } else {
+        console.warn('[Research] Files uploaded but no content provided');
+        emit('thinking', {
+          thought: 'Files uploaded but content not available yet. Proceeding with web research.',
+          thought_type: 'planning'
+        });
+      }
     } else {
       emit('thinking', {
         thought: 'No uploaded files. I\'ll search for external information to answer this query.',
