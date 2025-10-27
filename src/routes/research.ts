@@ -11,6 +11,7 @@ import { requireAuth } from '../middleware/requireAuth.js';
 import { searchWeb, isOpenAIConfigured } from '../services/openaiSearch.js';
 import { getMultipleFiles, combineFileContents } from '../services/fileRetrieval.js';
 import { generateReport, generateSectionSummary } from '../services/reportGenerator.js';
+import { generateSmartReport, generateBriefReport } from '../services/smartReportGenerator.js';
 import { ChartService } from '../services/chartService.js';
 import { callAPIM } from '../services/agenticFlow.js';
 
@@ -27,7 +28,12 @@ async function createToolBasedPlan(
   query: string,
   uploadedFiles: UploadedFile[],
   depth: string,
-  requestedCharts?: Array<{type: string; goal?: string}>
+  requestedCharts?: Array<{type: string; goal?: string}>,
+  regenerationContext?: {
+    isRegeneration: boolean;
+    feedback: string | null;
+    originalReport: string | null;
+  }
 ): Promise<{
   understanding: {
     coreSubject: string;
@@ -86,8 +92,39 @@ async function createToolBasedPlan(
     ? uploadedFiles.map(f => `FILE: ${f.fileName}\nCONTENT:\n${f.content || '(no content)'}`).join('\n\n---\n\n')
     : null;
 
-  const systemPrompt = `You are an intelligent research planning AI with access to tools.
+  // ✅ BUILD REGENERATION CONTEXT (if applicable)
+  const regenerationInstructions = regenerationContext?.isRegeneration ? `
 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔄 REGENERATION MODE ACTIVE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+This is a REGENERATION, NOT a new research request.
+
+ORIGINAL REPORT (what you generated before):
+${regenerationContext.originalReport ? regenerationContext.originalReport.substring(0, 3000) + '...[truncated]' : '(not available)'}
+
+USER'S FEEDBACK FOR CHANGES:
+${regenerationContext.feedback || '(no specific feedback - regenerate fresh)'}
+
+CRITICAL REGENERATION RULES:
+- You already researched this topic before (see ORIGINAL REPORT above)
+- User wants you to MODIFY/IMPROVE that report based on their feedback
+- You MAY skip redundant searches if the original report has sufficient info
+- Focus on INCORPORATING THE FEEDBACK, not starting from scratch
+- If no feedback given: regenerate with improved quality/structure
+
+YOUR TASK:
+- Read the original report to understand what was already found
+- Apply the user's requested changes (if any)
+- Only search for NEW information if gaps exist or feedback requires it
+- Create a better version that addresses the feedback
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+` : '';
+
+  const systemPrompt = `You are an intelligent research planning AI with access to tools.
+${regenerationInstructions}
 YOUR JOB:
 1. UNDERSTAND what the user wants (identify the REAL subject, not query keywords!)
 2. CHOOSE which tools to use
@@ -176,6 +213,14 @@ Create a tool-based research plan. Remember:
 
   } catch (error: any) {
     console.error('[Tool Planning] Error:', error);
+    
+    // ⚠️ REGENERATION FALLBACK: If this is a regeneration and APIM failed,
+    // we MUST NOT generate a fresh plan - that defeats the purpose!
+    if (regenerationContext?.isRegeneration) {
+      console.error('[Tool Planning] ❌ APIM failed during REGENERATION - this is critical!');
+      console.error('[Tool Planning] Cannot use fallback for regeneration - fallback ignores feedback');
+      throw new Error('APIM failed to generate regeneration plan. Cannot proceed with generic fallback.');
+    }
     
     // Smart fallback: parse query to extract subject
     let subject = query;
@@ -791,11 +836,16 @@ router.post('/start', async (req, res) => {
     if (!query || !query.trim()) {
       return res.status(400).json({ error: 'Query is required' });
     }
-    
-    if (!['short', 'medium', 'long', 'comprehensive'].includes(depth)) {
-      return res.status(400).json({ error: 'Invalid depth value' });
+
+    // Validate and default depth to 'medium' (standard) if invalid
+    const validDepths = ['short', 'medium', 'long', 'comprehensive'];
+    let validatedDepth = depth;
+
+    if (!depth || !validDepths.includes(depth)) {
+      console.log('[Research] Invalid or missing depth:', depth, '- defaulting to "medium"');
+      validatedDepth = 'medium'; // Default to standard (2 pages)
     }
-    
+
     // Ensure user exists
     await ensureUser(userId, email);
 
@@ -806,7 +856,7 @@ router.post('/start', async (req, res) => {
       runId,
       userId,
       query: query.substring(0, 100),
-      depth,
+      depth: validatedDepth,
       filesCount: uploaded_files.length
     });
     
@@ -821,7 +871,7 @@ router.post('/start', async (req, res) => {
         runId,
         userId,
         query,
-        depth,
+        validatedDepth,
         'planning',
         JSON.stringify(uploaded_files),
         JSON.stringify(include_charts),
@@ -835,7 +885,7 @@ router.post('/start', async (req, res) => {
     
     // Start background processing (async, don't await)
     setImmediate(() => {
-      processResearch(runId, query, uploaded_files, depth).catch((error) => {
+      processResearch(runId, query, uploaded_files, validatedDepth).catch((error) => {
         console.error('[Research] Background processing error:', error);
         // Update run status to failed
         dbQuery(
@@ -882,7 +932,7 @@ router.get('/stream/:id', async (req, res) => {
     
     // Verify run exists and belongs to user
     const result = await dbQuery(
-      `SELECT id, user_id, query, status, uploaded_files, depth
+      `SELECT id, user_id, query, status, uploaded_files, depth, metadata
        FROM o1_research_runs
        WHERE id = $1 AND user_id = $2`,
       [runId, userId]
@@ -893,6 +943,21 @@ router.get('/stream/:id', async (req, res) => {
     }
 
     const run = result.rows[0];
+    
+    // ✅ REGENERATION DETECTION: Check if this is a regeneration run
+    const metadata = run.metadata || {};
+    const isRegeneration = !!metadata.regenerated_from;
+    const regenerationFeedback = metadata.feedback || null;
+    const originalReport = metadata.original_report || null;
+    
+    if (isRegeneration) {
+      console.log('[Research] 🔄 REGENERATION DETECTED:', {
+        originalRunId: metadata.regenerated_from,
+        hasFeedback: !!regenerationFeedback,
+        feedbackLength: regenerationFeedback?.length || 0,
+        hasOriginalReport: !!originalReport
+      });
+    }
 
     // Set SSE headers (CRITICAL for streaming)
     res.setHeader('Content-Type', 'text/event-stream');
@@ -901,15 +966,48 @@ router.get('/stream/:id', async (req, res) => {
     res.setHeader('X-Accel-Buffering', 'no'); // Disable nginx buffering
     res.flushHeaders();
     
-    // Helper to emit SSE events
-    const emit = (event: string, data: any) => {
-      // SSE format: event: <type>\ndata: <json>\n\n
-      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-    };
+    // Keep-alive interval (declare outside try block for cleanup access)
+    let keepAliveInterval: NodeJS.Timeout | null = null;
     
-    // ========================================================================
-    // PHASE 3: TRUE DYNAMIC PLANNING + EXECUTION (o1-Style)
-    // ========================================================================
+    try {
+      // Helper to emit SSE events with delay for client to receive
+      const emit = async (event: string, data: any) => {
+        // SSE format: event: <type>\ndata: <json>\n\n
+        res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+        // Flush immediately for real-time streaming
+        if ((res as any).flush) {
+          (res as any).flush();
+        }
+        // Small delay to let event reach client before next one
+        await new Promise(resolve => setTimeout(resolve, 50));
+      };
+      
+      // Keep-alive ping to prevent timeout (every 15 seconds)
+      keepAliveInterval = setInterval(() => {
+      try {
+        res.write(`: keepalive\n\n`);
+        if ((res as any).flush) {
+          (res as any).flush();
+        }
+      } catch (err) {
+        console.error('[Research] Keep-alive write failed:', err);
+        if (keepAliveInterval) {
+          clearInterval(keepAliveInterval);
+        }
+      }
+      }, 15000);
+      
+      // Clean up on connection close
+      req.on('close', () => {
+        console.log('[Research] Client disconnected, cleaning up...');
+        if (keepAliveInterval) {
+          clearInterval(keepAliveInterval);
+        }
+      });
+      
+      // ========================================================================
+      // PHASE 3: TRUE DYNAMIC PLANNING + EXECUTION (o1-Style)
+      // ========================================================================
     
     const startTime = Date.now();
     console.log('[Research] Starting o1-style research with dynamic planning...');
@@ -922,9 +1020,21 @@ router.get('/stream/:id', async (req, res) => {
     
     // Parse uploaded files and chart requests
     console.log('[Research] Raw uploaded_files from DB:', typeof run.uploaded_files, run.uploaded_files);
-    const uploadedFiles: UploadedFile[] = Array.isArray(run.uploaded_files) 
-      ? run.uploaded_files 
-      : (run.uploaded_files ? JSON.parse(run.uploaded_files) : []);
+    let uploadedFiles: UploadedFile[] = [];
+    
+    if (Array.isArray(run.uploaded_files)) {
+      uploadedFiles = run.uploaded_files;
+    } else if (typeof run.uploaded_files === 'string') {
+      try {
+        uploadedFiles = JSON.parse(run.uploaded_files);
+      } catch (e) {
+        console.warn('[Research] Failed to parse uploaded_files string, using empty array');
+        uploadedFiles = [];
+      }
+    } else if (run.uploaded_files && typeof run.uploaded_files === 'object') {
+      // It's already an object but not an array (e.g. empty object {})
+      uploadedFiles = [];
+    }
     console.log('[Research] Parsed uploadedFiles:', uploadedFiles.length, 'files');
     if (uploadedFiles.length > 0) {
       console.log('[Research] First file:', {
@@ -936,9 +1046,21 @@ router.get('/stream/:id', async (req, res) => {
     }
     
     // Parse include_charts - can be string[] or ChartRequest[]
-    const includeChartsRaw = Array.isArray(run.include_charts)
-      ? run.include_charts
-      : (run.include_charts ? JSON.parse(run.include_charts) : []);
+    let includeChartsRaw: any[] = [];
+    
+    if (Array.isArray(run.include_charts)) {
+      includeChartsRaw = run.include_charts;
+    } else if (typeof run.include_charts === 'string') {
+      try {
+        includeChartsRaw = JSON.parse(run.include_charts);
+      } catch (e) {
+        console.warn('[Research] Failed to parse include_charts string, using empty array');
+        includeChartsRaw = [];
+      }
+    } else if (run.include_charts && typeof run.include_charts === 'object') {
+      // Empty object {}
+      includeChartsRaw = [];
+    }
     
     // Normalize to always have type and goal
     const chartRequests: Array<{type: string; goal?: string}> = includeChartsRaw.map((item: any) => {
@@ -958,8 +1080,16 @@ router.get('/stream/:id', async (req, res) => {
     // TOOL-BASED RESEARCH: Plan with tools, then execute
     // ========================================================================
     
-    emit('thinking', {
-      thought: 'Analyzing your request and planning research approach...',
+    // ✅ Show regeneration message if applicable
+    if (isRegeneration) {
+      await emit('thinking', {
+        thought: `🔄 Regenerating research with your feedback${regenerationFeedback ? `: "${regenerationFeedback.substring(0, 100)}"` : ''}`,
+        thought_type: 'regeneration'
+      });
+    }
+    
+    await emit('thinking', {
+      thought: isRegeneration ? 'Re-analyzing research approach with your feedback...' : 'Analyzing your request and planning research approach...',
       thought_type: 'planning'
     });
     
@@ -999,34 +1129,40 @@ router.get('/stream/:id', async (req, res) => {
       }
     }
     
-    // Create tool-based research plan
+    // Create tool-based research plan (with regeneration context if applicable)
     const plan = await createToolBasedPlan(
       run.query,
       uploadedFiles,
       run.depth,
-      chartRequests
+      chartRequests,
+      // ✅ PASS REGENERATION CONTEXT
+      isRegeneration ? {
+        isRegeneration: true,
+        feedback: regenerationFeedback,
+        originalReport: originalReport
+      } : undefined
     );
     
     console.log('[Tool Planning] Plan created:', JSON.stringify(plan, null, 2));
     
     // Show understanding
-    emit('thinking', {
+    await emit('thinking', {
       thought: `Researching: "${plan.understanding.coreSubject}"`,
       thought_type: 'analyzing'
     });
     
-    emit('thinking', {
+    await emit('thinking', {
       thought: `Goal: ${plan.understanding.userGoal}`,
       thought_type: 'analyzing'
     });
     
-    emit('thinking', {
+    await emit('thinking', {
       thought: `Format: ${plan.understanding.outputFormat} (${plan.toolCalls.length} tools)`,
       thought_type: 'planning'
     });
     
     // Show tool plan
-    emit('thinking', {
+    await emit('thinking', {
       thought: `Tool Plan:\n${plan.toolCalls.map((tc, i) => `${i + 1}. ${tc.tool}(${Object.keys(tc.parameters).join(', ')})\n   → ${tc.reasoning}`).join('\n')}`,
       thought_type: 'planning'
     });
@@ -1035,20 +1171,22 @@ router.get('/stream/:id', async (req, res) => {
     // EXECUTE TOOL CALLS
     // ========================================================================
     
-    emit('thinking', {
+    await emit('thinking', {
       thought: `Executing ${plan.toolCalls.length} tool${plan.toolCalls.length > 1 ? 's' : ''}...`,
       thought_type: 'executing'
     });
     
+    // Execute tools with comprehensive error handling
     for (let i = 0; i < plan.toolCalls.length; i++) {
       const toolCall = plan.toolCalls[i];
       console.log(`[Tool Execution] Tool ${i + 1}/${plan.toolCalls.length}: ${toolCall.tool}`, toolCall.parameters);
       
-      emit('thinking', {
+      await emit('thinking', {
         thought: `Tool ${i + 1}/${plan.toolCalls.length}: ${toolCall.tool}`,
         thought_type: 'executing'
       });
       
+      // Wrap each tool execution in try-catch to prevent stream crashes
       try {
         // Execute based on tool type
         switch (toolCall.tool) {
@@ -1057,7 +1195,7 @@ router.get('/stream/:id', async (req, res) => {
             const filesWithContent = uploadedFiles.filter((f: any) => f.content && f.content.trim().length > 0) as UploadedFile[];
           
             if (filesWithContent.length > 0) {
-              emit('tool.call', {
+              await emit('tool.call', {
                 tool: 'analyze_documents',
                 purpose: toolCall.parameters.focus || `Analyze ${filesWithContent.length} uploaded document${filesWithContent.length > 1 ? 's' : ''}`
               });
@@ -1083,21 +1221,21 @@ router.get('/stream/:id', async (req, res) => {
               allFindings.push(...documentFindings);
               sources.push(...filesWithContent.map((f: UploadedFile) => `Uploaded: ${f.fileName}`));
               
-              emit('tool.result', {
+              await emit('tool.result', {
                 tool: 'document_analysis',
                 findings_count: documentFindings.length,
                 key_insights: `Extracted ${documentFindings.length} key insights from uploaded documents`
     });
   } catch (error: any) {
               console.error('[Research] Document analysis error:', error);
-              emit('tool.result', {
+              await emit('tool.result', {
                 tool: 'document_analysis',
                 findings_count: 0,
                 key_insights: `Analysis failed: ${error.message}`
               });
             }
           } else {
-            emit('thinking', {
+            await emit('thinking', {
               thought: 'Files uploaded but content not available. Skipping this step.',
               thought_type: 'pivot'
             });
@@ -1110,7 +1248,7 @@ router.get('/stream/:id', async (req, res) => {
             if (isOpenAIConfigured()) {
               const searchQuery = toolCall.parameters.searchQuery || run.query;
               
-              emit('tool.call', {
+              await emit('tool.call', {
                 tool: 'search_web',
                 purpose: `Search: ${searchQuery}`
               });
@@ -1122,21 +1260,21 @@ router.get('/stream/:id', async (req, res) => {
                 allFindings.push(...searchResult.findings);
                 sources.push(...searchResult.sources);
                 
-                emit('tool.result', {
+                await emit('tool.result', {
                   tool: 'search_web',
                   findings_count: searchResult.findings.length,
                   key_insights: searchResult.summary
-                });
-              } catch (error: any) {
+    });
+  } catch (error: any) {
                 console.error('[Tool Execution] Web search error:', error);
-                emit('tool.result', {
+                await emit('tool.result', {
                   tool: 'search_web',
                   findings_count: 0,
                   key_insights: `Search failed: ${error.message}`
                 });
               }
             } else {
-              emit('thinking', {
+              await emit('thinking', {
                 thought: 'External search not available (OpenAI not configured).',
                 thought_type: 'pivot'
               });
@@ -1146,7 +1284,7 @@ router.get('/stream/:id', async (req, res) => {
           
           case 'generate_chart': {
             // Chart generation from tool parameters
-            emit('thinking', {
+            await emit('thinking', {
               thought: `Generating ${toolCall.parameters.chartType} chart...`,
               thought_type: 'synthesis'
             });
@@ -1157,7 +1295,7 @@ router.get('/stream/:id', async (req, res) => {
                 const chartType = toolCall.parameters.chartType || 'bar';
                 const chartGoal = toolCall.parameters.goal || `Create a ${chartType} chart from research findings`;
                 
-                emit('tool.call', {
+                await emit('tool.call', {
                   tool: 'generate_chart',
                   purpose: chartGoal
                 });
@@ -1177,14 +1315,14 @@ router.get('/stream/:id', async (req, res) => {
                   chartUrls[chartType] = chartResult.chart_url;
                   console.log(`[Tool Execution] ${chartType} chart generated: ${chartResult.chart_url}`);
                   
-                  emit('tool.result', {
+                  await emit('tool.result', {
                     tool: 'generate_chart',
                     findings_count: 1,
                     key_insights: `${chartType} chart generated successfully`
                   });
                 } else {
                   console.warn(`[Tool Execution] ${chartType} chart generation failed:`, chartResult.error);
-                  emit('tool.result', {
+                  await emit('tool.result', {
                     tool: 'generate_chart',
                     findings_count: 0,
                     key_insights: `${chartType} chart generation failed: ${chartResult.error || 'Unknown error'}`
@@ -1192,14 +1330,14 @@ router.get('/stream/:id', async (req, res) => {
                 }
   } catch (error: any) {
                 console.error(`[Tool Execution] Error generating chart:`, error);
-                emit('tool.result', {
+                await emit('tool.result', {
                   tool: 'generate_chart',
                   findings_count: 0,
                   key_insights: `Error: ${error.message}`
                 });
               }
             } else {
-              emit('thinking', {
+              await emit('thinking', {
                 thought: 'No findings available yet for chart generation. Skipping.',
                 thought_type: 'pivot'
               });
@@ -1209,7 +1347,7 @@ router.get('/stream/:id', async (req, res) => {
           
           case 'compile_report': {
             // Report compilation - will be handled after loop
-            emit('thinking', {
+            await emit('thinking', {
               thought: 'Preparing to compile final report...',
               thought_type: 'writing'
             });
@@ -1219,7 +1357,7 @@ router.get('/stream/:id', async (req, res) => {
           
           default: {
             // Unknown tool
-            emit('thinking', {
+            await emit('thinking', {
               thought: `Executing tool: ${toolCall.tool}`,
               thought_type: 'executing'
             });
@@ -1228,7 +1366,7 @@ router.get('/stream/:id', async (req, res) => {
         
   } catch (error: any) {
         console.error(`[Tool Execution] Error executing tool "${toolCall.tool}":`, error);
-        emit('thinking', {
+        await emit('thinking', {
           thought: `Tool encountered an issue: ${error.message}. Continuing with next tool.`,
           thought_type: 'pivot'
         });
@@ -1236,7 +1374,7 @@ router.get('/stream/:id', async (req, res) => {
     }
     
     // Charts already generated during execution (if plan included generate_chart steps)
-    emit('thinking', {
+    await emit('thinking', {
       thought: 'Plan execution complete. Finalizing report...',
       thought_type: 'synthesis'
     });
@@ -1251,20 +1389,20 @@ router.get('/stream/:id', async (req, res) => {
         execSummary = `Research on "${run.query}" with ${allFindings.length} findings from ${sources.length} sources.`;
       }
       
-      emit('section.completed', {
+      await emit('section.completed', {
         section: 'Executive Summary',
         preview: execSummary.substring(0, 200) + (execSummary.length > 200 ? '...' : '')
       });
       
       const keyFindingsPreview = allFindings.slice(0, 5).map((f, i) => `${i + 1}. ${f.substring(0, 80)}${f.length > 80 ? '...' : ''}`).join('\n');
       
-      emit('section.completed', {
+      await emit('section.completed', {
         section: 'Key Findings',
         preview: keyFindingsPreview
       });
     }
     
-    emit('thinking', {
+    await emit('thinking', {
       thought: 'Finalizing report with actionable insights...',
       thought_type: 'final_review'
     });
@@ -1290,20 +1428,17 @@ Please try rephrasing your query or check API configuration.`;
     } else {
       // Try APIM synthesis with fallback
       try {
-        // Get compile_report tool parameters
-        const compileReportTool = plan.toolCalls.find(tc => tc.tool === 'compile_report');
-        const reportFormat = compileReportTool?.parameters.format || plan.understanding.outputFormat;
-        const reportSections = compileReportTool?.parameters.sections;
+        // RESEARCH MODE: ALWAYS use structured format with sections
+        // The depth (short/medium/long) controls section LENGTH, not existence
+        // Brief/standard/comprehensive all get proper research structure
         
-        finalReport = await generateReport({
+        finalReport = await generateSmartReport({
           query: run.query,
-          depth: run.depth as any,
+          depth: run.depth as any, // This controls detail level
           fileFindings: uploadedFiles.length > 0 ? allFindings.filter(f => f.includes('From Uploaded Documents')) : undefined,
           webFindings: allFindings.filter(f => !f.includes('From Uploaded Documents')),
-          sources,
-          outputStyle: reportFormat as any,
-          reportSections: reportSections
-    });
+          sources
+        });
   } catch (error: any) {
         console.error('[Research] APIM report generation error:', error);
         
@@ -1348,7 +1483,7 @@ This ${run.depth}-depth research provides foundational information on the topic.
     const duration = Math.round((Date.now() - startTime) / 1000);
     
     // Final completion event
-    emit('research.completed', {
+    await emit('research.completed', {
       run_id: runId,
       report_content: finalReport,
       metadata: {
@@ -1379,23 +1514,40 @@ This ${run.depth}-depth research provides foundational information on the topic.
     
     console.log('[Research] Stream completed:', runId);
     
-    // Close SSE connection
-    res.end();
-    
+      // Clean up keep-alive interval
+      if (keepAliveInterval) {
+        clearInterval(keepAliveInterval);
+      }
+      
+      // Close SSE connection
+      res.end();
+      
   } catch (error: any) {
-    console.error('[Research] Stream error:', error);
-    
-    // Emit error event if possible
-    try {
-      res.write(`event: error\ndata: ${JSON.stringify({ 
-        message: 'Stream error occurred',
-        error: error.message 
-      })}\n\n`);
-    } catch (writeError) {
-      console.error('[Research] Failed to write error event:', writeError);
+      console.error('[Research] Stream error:', error);
+      console.error('[Research] Error stack:', error.stack);
+      
+      // Clean up keep-alive interval
+      if (keepAliveInterval) {
+        clearInterval(keepAliveInterval);
+      }
+      
+      // Emit error event if possible
+      try {
+        res.write(`event: error\ndata: ${JSON.stringify({ 
+          message: 'Stream error occurred',
+          error: error.message 
+        })}\n\n`);
+      } catch (writeError) {
+        console.error('[Research] Failed to write error event:', writeError);
+      }
+      
+      res.end();
     }
     
-    res.end();
+  } catch (error: any) {
+    // Outer try-catch for DB validation errors
+    console.error('[Research] Validation error:', error);
+    res.status(500).json({ error: 'Failed to initialize research stream' });
   }
 });
 
@@ -1407,11 +1559,11 @@ router.get('/status/:id', async (req, res) => {
   try {
     const runId = req.params.id;
     const userId = req.auth?.sub as string;
-
+    
     if (!userId) {
       return res.status(401).json({ error: 'User ID not found in token' });
     }
-
+    
     const result = await dbQuery(
       `SELECT id, status, query, depth, report_content, metadata, created_at, updated_at
        FROM o1_research_runs
@@ -1490,14 +1642,14 @@ router.get('/health', async (req, res) => {
 router.post('/:runId/chat', async (req, res) => {
   try {
     const { runId } = req.params;
-    const { message } = req.body;
-    const userId = (req as any).user?.sub;
+    const { message, chatHistory } = req.body;
+    const userId = req.auth?.sub as string;
 
     if (!message || typeof message !== 'string' || message.trim().length === 0) {
       return res.status(400).json({ error: 'Message is required' });
     }
 
-    console.log('[Research Chat] Follow-up question:', { runId, userId, message: message.substring(0, 100) });
+    console.log('[Research Chat] Follow-up question:', { runId, userId, message: message.substring(0, 100), historyLength: chatHistory?.length || 0 });
 
     // Retrieve the research run
     const result = await dbQuery(
@@ -1513,8 +1665,19 @@ router.post('/:runId/chat', async (req, res) => {
 
     const run = result.rows[0];
 
+    console.log('[Research Chat] Run status check:', {
+      runId,
+      status: run.status,
+      hasReport: !!run.report_content,
+      reportLength: run.report_content?.length || 0
+    });
+
     if (run.status !== 'completed') {
-      return res.status(400).json({ error: 'Research is not yet completed. Please wait for the report to finish.' });
+      return res.status(400).json({ 
+        error: 'Research is not yet completed. Please wait for the report to finish.',
+        current_status: run.status,
+        hint: 'The research is still running or failed. Please check the status endpoint.'
+      });
     }
 
     if (!run.report_content || run.report_content.trim().length === 0) {
@@ -1555,11 +1718,29 @@ Provide a helpful, conversational answer based on the research report above.`;
 
     console.log('[Research Chat] Calling APIM for follow-up answer...');
 
+    // Build messages array with conversation history
+    const messages: Array<{role: string; content: string}> = [
+      { role: 'system', content: systemPrompt }
+    ];
+
+    // Add chat history if provided
+    if (chatHistory && Array.isArray(chatHistory) && chatHistory.length > 0) {
+      for (const msg of chatHistory) {
+        if (msg.role && msg.content) {
+          messages.push({ role: msg.role, content: msg.content });
+        }
+      }
+    }
+
+    // Add current user message (with report context on first message only)
+    if (!chatHistory || chatHistory.length === 0) {
+      messages.push({ role: 'user', content: userPrompt });
+    } else {
+      messages.push({ role: 'user', content: message });
+    }
+
     // Call APIM for conversational response
-    const response = await callAPIM([
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt }
-    ]);
+    const response = await callAPIM(messages);
 
     // Extract content from APIM response
     const content = (response as any).choices?.[0]?.message?.content || response;
@@ -1576,6 +1757,135 @@ Provide a helpful, conversational answer based on the research report above.`;
     console.error('[Research Chat] Error:', error);
     return res.status(500).json({ 
       error: 'Failed to process follow-up question',
+      details: error.message 
+    });
+  }
+});
+
+/**
+ * POST /research/:runId/regenerate
+ * Regenerate research based on feedback/modifications
+ */
+router.post('/:runId/regenerate', async (req, res) => {
+  try {
+    const { runId } = req.params;
+    const { feedback } = req.body;
+    const userId = req.auth?.sub as string;
+
+    // ✅ Feedback is optional - if not provided, regenerate with original query
+    const feedbackText = (feedback && typeof feedback === 'string') ? feedback.trim() : '';
+
+    console.log('[Research Regenerate] Regenerating:', { 
+      runId, 
+      userId, 
+      hasFeedback: feedbackText.length > 0,
+      feedback: feedbackText ? feedbackText.substring(0, 100) : '(no feedback - regenerating original)' 
+    });
+
+    // Retrieve the original research run
+    const result = await dbQuery(
+      `SELECT id, user_id, query, report_content, status, metadata, depth, uploaded_files
+       FROM o1_research_runs
+       WHERE id = $1 AND user_id = $2`,
+      [runId, userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Research run not found' });
+    }
+
+    const originalRun = result.rows[0];
+
+    console.log('[Research Regenerate] Original run status:', {
+      runId,
+      status: originalRun.status,
+      hasReport: !!originalRun.report_content,
+      reportLength: originalRun.report_content?.length || 0
+    });
+
+    if (originalRun.status !== 'completed') {
+      return res.status(400).json({ 
+        error: 'Cannot regenerate - original research is not yet completed.',
+        current_status: originalRun.status,
+        hint: 'Please wait for the research to finish before regenerating.'
+      });
+    }
+
+    if (!originalRun.report_content || originalRun.report_content.trim().length === 0) {
+      return res.status(400).json({ error: 'No report content available to regenerate from.' });
+    }
+
+    // Create a new run for the regenerated research
+    const newRunId = generateRunId();
+    
+    await dbQuery(
+      `INSERT INTO o1_research_runs (
+        id, user_id, query, depth, status, 
+        uploaded_files, metadata, created_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
+      [
+        newRunId,
+        userId,
+        originalRun.query,
+        originalRun.depth || 'medium',
+        'planning',
+        originalRun.uploaded_files || '[]',
+        JSON.stringify({
+          regenerated_from: runId,
+          feedback: feedbackText || null,
+          original_report: originalRun.report_content.substring(0, 10000), // ✅ Store first 10k chars for context
+          started_at: new Date().toISOString()
+        })
+      ]
+    );
+
+    console.log('[Research Regenerate] Created new run:', newRunId);
+
+    // Start async regeneration with context of old report + feedback
+    let uploadedFiles = [];
+    try {
+      if (originalRun.uploaded_files && typeof originalRun.uploaded_files === 'string') {
+        uploadedFiles = JSON.parse(originalRun.uploaded_files);
+      } else if (Array.isArray(originalRun.uploaded_files)) {
+        uploadedFiles = originalRun.uploaded_files;
+      }
+    } catch (parseError) {
+      console.warn('[Research Regenerate] Could not parse uploaded_files, using empty array');
+      uploadedFiles = [];
+    }
+    
+    // ✅ REBUILD: Use same processResearch flow, but stream will detect regeneration from metadata
+    // Metadata already contains: regenerated_from, feedback, original report reference
+    setImmediate(() => {
+      processResearch(
+        newRunId,
+        originalRun.query, // ✅ UNCHANGED original query
+        uploadedFiles,
+        originalRun.depth || 'medium'
+      ).catch((error) => {
+        console.error('[Research Regenerate] Background processing error:', error);
+        dbQuery(
+          `UPDATE o1_research_runs 
+           SET status = 'failed', 
+               metadata = jsonb_set(metadata, '{error}', to_jsonb($2::text))
+           WHERE id = $1`,
+          [newRunId, error.message]
+        );
+      });
+    });
+
+    return res.json({
+      success: true,
+      run_id: newRunId,
+      status: 'planning',
+      message: 'Research regeneration started'
+    });
+
+  } catch (error: any) {
+    console.error('[Research Regenerate] Error:', error);
+    return res.status(500).json({ 
+      error: 'Failed to start regeneration',
       details: error.message 
     });
   }

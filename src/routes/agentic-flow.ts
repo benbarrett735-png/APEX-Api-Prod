@@ -4,7 +4,7 @@
  */
 
 import { Router } from 'express';
-import { AgenticFlow } from '../services/agenticFlow.js';
+import { AgenticFlow, callAPIM } from '../services/agenticFlow.js';
 import { query as dbQuery } from '../db/query.js';
 import { requireAuth } from '../middleware/requireAuth.js';
 
@@ -79,7 +79,7 @@ router.post('/runs', async (req, res) => {
     }
     
     // Validate that the mode is supported
-    const supportedModes = ['reports', 'charts', 'research'];
+    const supportedModes = ['reports', 'charts', 'research', 'templates', 'plans'];
     if (mode && !supportedModes.includes(mode)) {
       return res.status(400).json({ 
         error: 'Mode not implemented',
@@ -489,6 +489,189 @@ async function executeFlowAsync(runId: string, userId: string, mode: string): Pr
     console.error(`[executeFlowAsync] ========== END ERROR ==========`);
   }
 }
+
+/**
+ * POST /agentic-flow/:runId/chat
+ * Follow-up conversational chat about a completed chart
+ */
+router.post('/:runId/chat', async (req, res) => {
+  try {
+    const { runId } = req.params;
+    const { message, chatHistory } = req.body;
+    const userId = (req as any).user?.sub || req.auth?.sub;
+
+    if (!message || typeof message !== 'string' || message.trim().length === 0) {
+      return res.status(400).json({ error: 'Message is required' });
+    }
+
+    console.log('[AgenticFlow Chat] Follow-up question:', { runId, userId, message: message.substring(0, 100), historyLength: chatHistory?.length || 0 });
+
+    // Retrieve the agentic run (charts mode)
+    const result = await dbQuery(
+      `SELECT run_id, user_id, mode, goal, status
+       FROM agentic_runs
+       WHERE run_id = $1 AND user_id = $2`,
+      [runId, userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Chart run not found' });
+    }
+
+    const run = result.rows[0];
+
+    if (run.status !== 'completed') {
+      return res.status(400).json({ error: 'Chart is not yet completed. Please wait for the chart to finish generating.' });
+    }
+
+    // Get chart artifacts
+    const artifactsResult = await dbQuery(
+      `SELECT uri, type, meta FROM agentic_artifacts WHERE run_id = $1`,
+      [runId]
+    );
+
+    let chartContent = `Goal: ${run.goal}\n\n`;
+    if (artifactsResult.rows.length > 0) {
+      for (const artifact of artifactsResult.rows) {
+        const meta = typeof artifact.meta === 'string' ? JSON.parse(artifact.meta) : artifact.meta;
+        if (meta.chart_url) {
+          chartContent += `Chart Type: ${meta.chart_type || 'unknown'}\n`;
+          chartContent += `Title: ${meta.title || 'Chart'}\n`;
+          chartContent += `URL: ${meta.chart_url}\n\n`;
+        }
+      }
+    }
+
+    // Build context for APIM
+    const chartContext = `CHART (Generated for goal: "${run.goal}"):\n\n${chartContent}`;
+
+    const systemPrompt = `You are a helpful data visualization assistant. The user has a chart and is asking follow-up questions about it.
+
+CHART CONTEXT:
+${chartContext}
+
+YOUR JOB:
+- Answer questions BASED ON THE CHART DESCRIPTION
+- Maintain conversation context from previous messages
+- Be conversational and helpful
+- Reference specific data points from the chart
+- If asked something not in the chart, acknowledge limitations
+
+CRITICAL:
+- DO NOT make up data
+- Keep responses focused and concise`;
+
+    // Build message array with conversation history
+    const messages: Array<{role: string; content: string}> = [
+      { role: 'system', content: systemPrompt }
+    ];
+
+    // Add chat history if provided
+    if (chatHistory && Array.isArray(chatHistory)) {
+      for (const msg of chatHistory) {
+        if (msg.role && msg.content) {
+          messages.push({ role: msg.role, content: msg.content });
+        }
+      }
+    }
+
+    // Add current message
+    messages.push({ role: 'user', content: message });
+
+    console.log('[AgenticFlow Chat] Calling APIM with', messages.length, 'messages...');
+
+    // Call APIM for conversational response
+    const response = await callAPIM(messages);
+
+    const answer = response.choices[0]?.message?.content || 'I apologize, but I was unable to generate a response. Please try again.';
+
+    console.log('[AgenticFlow Chat] ✅ Follow-up answer generated');
+
+    return res.json({
+      success: true,
+      answer
+    });
+
+  } catch (error: any) {
+    console.error('[AgenticFlow Chat] Error:', error);
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /agentic-flow/:runId/regenerate
+ * Regenerate chart based on feedback/modifications
+ */
+router.post('/:runId/regenerate', async (req, res) => {
+  try {
+    const { runId } = req.params;
+    const { feedback } = req.body;
+    const userId = (req as any).user?.sub || req.auth?.sub;
+    const orgId = (req as any).user?.['custom:org_id'] || req.auth?.['custom:org_id'] || '00000000-0000-0000-0000-000000000001';
+
+    // ✅ Feedback is optional - if not provided, regenerate with original goal
+    const feedbackText = (feedback && typeof feedback === 'string') ? feedback.trim() : '';
+
+    console.log('[AgenticFlow Regenerate] Regenerating:', { 
+      runId, 
+      userId, 
+      hasFeedback: feedbackText.length > 0,
+      feedback: feedbackText ? feedbackText.substring(0, 100) : '(no feedback - regenerating original)' 
+    });
+
+    // Retrieve the original chart run
+    const result = await dbQuery(
+      `SELECT run_id, user_id, mode, goal, status
+       FROM agentic_runs
+       WHERE run_id = $1 AND user_id = $2`,
+      [runId, userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Chart run not found' });
+    }
+
+    const originalRun = result.rows[0];
+
+    if (originalRun.status !== 'completed') {
+      return res.status(400).json({ error: 'Cannot regenerate - original chart is not yet completed.' });
+    }
+
+    // ✅ Simple: Just inject feedback into goal like research does
+    const modifiedGoal = feedbackText 
+      ? `${originalRun.goal}\n\nREGENERATION: ${feedbackText}`
+      : originalRun.goal;
+    
+    console.log('[AgenticFlow Regenerate] Creating new run with modified goal:', modifiedGoal.substring(0, 200));
+
+    // Create the run using the static method
+    const newRunId = await AgenticFlow.createRun(userId, modifiedGoal, 'charts');
+    
+    console.log('[AgenticFlow Regenerate] Created new run:', newRunId);
+
+    // Start async regeneration - create flow and execute
+    setImmediate(() => {
+      const flow = new AgenticFlow(newRunId, userId, 'charts');
+      flow.execute().catch((error) => {
+        console.error('[AgenticFlow Regenerate] Background processing error:', error);
+      });
+    });
+
+    return res.json({
+      success: true,
+      run_id: newRunId,
+      status: 'running',
+      message: 'Chart regeneration started'
+    });
+
+  } catch (error: any) {
+    console.error('[AgenticFlow Regenerate] Error:', error);
+    return res.status(500).json({ 
+      error: 'Failed to start regeneration',
+      details: error.message 
+    });
+  }
+});
 
 export default router;
 

@@ -1592,6 +1592,11 @@ Rules:
 - Do NOT include comments, markdown, or prose.
 - ALWAYS set: "width": 1200, "height": 700, "dpi": 100 for large, readable charts.
 
+DATA HANDLING:
+- If real data is provided in the user's request, extract and use it.
+- If the provided data is insufficient or doesn't match the chart goal, generate realistic synthetic/example data that demonstrates the intended visualization.
+- Use reasonable, industry-standard values for synthetic data (e.g. for financial charts: values in thousands/millions, for percentages: 0-100, for dates: recent years).
+
 Now transform the user's intent + data into the correct JSON for the ${chartType} chart type.`;
   }
 

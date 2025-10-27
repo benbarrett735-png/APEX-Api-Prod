@@ -23,7 +23,7 @@ export async function callAPIM(messages: any[], stream = false): Promise<any> {
 
   // Create AbortController for timeout
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
+  const timeoutId = setTimeout(() => controller.abort(), 120000); // 120 second timeout (reports need more time)
 
   try {
     const response = await fetch(url, {
@@ -814,7 +814,7 @@ export class AgenticFlow {
               name: "create_chart", 
               args: { 
                 chart_type: chartType,
-                title: `${goal} - ${chartType} chart`,
+                title: `${goal.split('\n')[0]} - ${chartType} chart`,  // Use only first line for title
                 source_artifact: "step-001" 
               } 
             },
@@ -831,7 +831,7 @@ export class AgenticFlow {
             name: "create_chart", 
             args: { 
               chart_type: "bar",
-              title: goal,
+              title: goal.split('\n')[0],  // Use only first line for title
               source_artifact: "step-001" 
             } 
           },
@@ -2022,9 +2022,12 @@ Write the ${section_name} section now in markdown format with ## heading:`
     const run = await this.getRun();
     const reportTitle = run.goal;
 
-    fullReport += `# ${reportTitle}\n\n`;
-    fullReport += `**Generated:** ${new Date().toLocaleString()}\n\n`;
-    fullReport += `---\n\n`;
+    // For charts mode: Skip all the extra formatting, just show charts
+    if (this.mode !== 'charts') {
+      fullReport += `# ${reportTitle}\n\n`;
+      fullReport += `**Generated:** ${new Date().toLocaleString()}\n\n`;
+      fullReport += `---\n\n`;
+    }
 
     // Collect all sections and charts
     for (const artifact of artifactsResult.rows) {
@@ -2078,21 +2081,35 @@ Write the ${section_name} section now in markdown format with ## heading:`
 
     // Embed charts INLINE throughout the report (not at the end)
     if (chartData.length > 0) {
-      fullReport += `\n# 📊 Data Visualizations\n\n`;
-      chartData.forEach((chart, idx) => {
-        fullReport += `## ${chart.title}\n\n`;
-        if (chart.failed) {
-          fullReport += `⚠️ **Chart Generation Failed**\n\n`;
-          fullReport += `**Error:** ${chart.error}\n\n`;
-          fullReport += `**Chart Type:** ${chart.type}\n\n`;
-          console.log(`[AssembleReport] Chart failed: ${chart.title} - ${chart.error}`);
-        } else {
-          fullReport += `![${chart.title}](${chart.url})\n\n`;
-          fullReport += `**Chart Type:** ${chart.type}\n\n`;
-          console.log(`[AssembleReport] Embedded chart: ${chart.title} at ${chart.url}`);
-        }
-      });
-      fullReport += `---\n\n`;
+      // For charts mode: Clean, minimal output - just the charts
+      if (this.mode === 'charts') {
+        chartData.forEach((chart, idx) => {
+          if (chart.failed) {
+            fullReport += `**${chart.title}:** Chart generation failed (${chart.error})\n\n`;
+            console.log(`[AssembleReport] Chart failed: ${chart.title} - ${chart.error}`);
+          } else {
+            fullReport += `![${chart.title}](${chart.url})\n\n`;
+            console.log(`[AssembleReport] Embedded chart: ${chart.title} at ${chart.url}`);
+          }
+        });
+      } else {
+        // For other modes: Full formatting
+        fullReport += `\n# 📊 Data Visualizations\n\n`;
+        chartData.forEach((chart, idx) => {
+          fullReport += `## ${chart.title}\n\n`;
+          if (chart.failed) {
+            fullReport += `⚠️ **Chart Generation Failed**\n\n`;
+            fullReport += `**Error:** ${chart.error}\n\n`;
+            fullReport += `**Chart Type:** ${chart.type}\n\n`;
+            console.log(`[AssembleReport] Chart failed: ${chart.title} - ${chart.error}`);
+          } else {
+            fullReport += `![${chart.title}](${chart.url})\n\n`;
+            fullReport += `**Chart Type:** ${chart.type}\n\n`;
+            console.log(`[AssembleReport] Embedded chart: ${chart.title} at ${chart.url}`);
+          }
+        });
+        fullReport += `---\n\n`;
+      }
     }
 
     // Add report metadata (skip for charts mode - cleaner output)
@@ -2609,13 +2626,13 @@ Write the ${section_name} section now in markdown format with ## heading:`
                     mode === 'plans' ? ['plan_assembled'] :
                     completionCriteria;
     
-    // Store mode in completion criteria for now (until we add mode column)
+    // Store mode in completion criteria for backward compat
     const criteriaWithMode = [...criteria, `mode:${mode}`];
     
     await dbQuery(
-      `INSERT INTO agentic_runs (run_id, user_id, goal, status, completion_criteria, started_at)
-       VALUES ($1, $2, $3, 'active', $4, NOW())`,
-      [runId, userId, goal, JSON.stringify(criteriaWithMode)]
+      `INSERT INTO agentic_runs (run_id, user_id, goal, status, mode, completion_criteria, started_at)
+       VALUES ($1, $2, $3, 'active', $4, $5, NOW())`,
+      [runId, userId, goal, mode, JSON.stringify(criteriaWithMode)]
     );
 
     return runId;
