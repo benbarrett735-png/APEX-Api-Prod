@@ -982,7 +982,7 @@ router.get('/stream/:id', async (req, res) => {
         await new Promise(resolve => setTimeout(resolve, 50));
       };
       
-      // Keep-alive ping to prevent timeout (every 15 seconds)
+      // Keep-alive ping to prevent timeout (every 5 seconds for App Runner/Amplify proxies)
       keepAliveInterval = setInterval(() => {
       try {
         res.write(`: keepalive\n\n`);
@@ -995,7 +995,7 @@ router.get('/stream/:id', async (req, res) => {
           clearInterval(keepAliveInterval);
         }
       }
-      }, 15000);
+      }, 5000);
       
       // Clean up on connection close
       req.on('close', () => {

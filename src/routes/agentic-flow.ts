@@ -229,11 +229,25 @@ router.get('/runs/:runId/stream', async (req, res) => {
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   };
 
+  // Keep-alive ping to prevent timeout (every 5 seconds for App Runner/Amplify proxies)
+  const keepAliveInterval = setInterval(() => {
+    try {
+      res.write(`: keepalive\n\n`);
+      if ((res as any).flush) {
+        (res as any).flush();
+      }
+    } catch (err) {
+      console.error('[AgenticFlow] Keep-alive write failed:', err);
+      clearInterval(keepAliveInterval);
+    }
+  }, 5000);
+
   try {
     // Send initial run state
     const runResult = await dbQuery(`SELECT * FROM agentic_runs WHERE run_id = $1`, [runId]);
     if (runResult.rows.length === 0) {
       sendEvent('error', { message: 'Run not found' });
+      clearInterval(keepAliveInterval);
       res.end();
       return;
     }
@@ -406,6 +420,7 @@ router.get('/runs/:runId/stream', async (req, res) => {
             
             sendEvent('research.complete', { status, researchContent: reportContent });
             clearInterval(pollInterval);
+            clearInterval(keepAliveInterval);
             res.end();
           }
         }
@@ -417,12 +432,14 @@ router.get('/runs/:runId/stream', async (req, res) => {
     // Clean up on client disconnect
     req.on('close', () => {
       clearInterval(pollInterval);
+      clearInterval(keepAliveInterval);
       res.end();
     });
 
   } catch (error: any) {
     console.error('Error streaming events:', error);
     sendEvent('error', { message: error.message });
+    clearInterval(keepAliveInterval);
     res.end();
   }
 });
