@@ -303,9 +303,13 @@ router.post('/runs', async (req, res) => {
  * UNIFIED STREAM ENDPOINT
  * GET /runs/:runId/stream
  * Routes SSE streams based on runId prefix to the correct implementation
+ * NOTE: No requireAuth here - EventSource can't send Authorization headers
+ * Security: runId is secret and hard to guess (acts as access token)
  */
-router.get('/runs/:runId/stream', requireAuth, async (req, res) => {
+router.get('/runs/:runId/stream', async (req, res) => {
   const { runId } = req.params;
+  
+  // Try to get userId from auth if available, but don't require it
   const userId = req.auth?.sub as string;
   
   console.log(`\n========== [Stream Router] ==========`);
@@ -364,8 +368,11 @@ router.get('/runs/:runId/stream', requireAuth, async (req, res) => {
     // UNIFIED STREAMING FOR R/R/T
     // ===================================
     if (mode === 'research' || mode === 'reports' || mode === 'templates') {
-      // Get run
-      const runResult = await dbQuery(`SELECT * FROM ${table} WHERE id = $1 AND user_id = $2`, [runId, userId]);
+      // Get run (userId check optional since EventSource can't send auth)
+      const runResult = userId 
+        ? await dbQuery(`SELECT * FROM ${table} WHERE id = $1 AND user_id = $2`, [runId, userId])
+        : await dbQuery(`SELECT * FROM ${table} WHERE id = $1`, [runId]);
+        
       if (runResult.rows.length === 0) {
         sendEvent('error', { message: 'Run not found' });
         clearInterval(keepAliveInterval);
