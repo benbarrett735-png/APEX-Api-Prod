@@ -11,8 +11,13 @@ import { callAPIM } from '../services/agenticFlow.js';
 
 const router = Router();
 
-// Apply auth middleware
-router.use(requireAuth);
+// Apply auth middleware to all routes EXCEPT /stream/:runId (EventSource can't send headers)
+router.use((req, res, next) => {
+  if (req.path.match(/^\/stream\//)) {
+    return next();
+  }
+  return requireAuth(req, res, next);
+});
 
 // Interface for uploaded files (matches research/reports)
 interface UploadedFile {
@@ -154,7 +159,7 @@ router.post('/generate', async (req, res) => {
  */
 router.get('/stream/:runId', async (req, res) => {
   const { runId } = req.params;
-  const userId = req.auth?.sub as string;
+  const userId = req.auth?.sub as string; // Optional - EventSource can't send auth headers
 
   // Set up SSE
   res.setHeader('Content-Type', 'text/event-stream');
@@ -184,10 +189,10 @@ router.get('/stream/:runId', async (req, res) => {
   }, 2000);
 
   try {
-    // Get run details
+    // Get run details (runId is crypto-random, acts as access token)
     const result = await dbQuery(
-      `SELECT * FROM o1_research_runs WHERE id = $1 AND user_id = $2`,
-      [runId, userId]
+      `SELECT * FROM o1_research_runs WHERE id = $1`,
+      [runId]
     );
 
     if (result.rows.length === 0) {

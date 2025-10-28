@@ -17,9 +17,6 @@ import { callAPIM } from '../services/agenticFlow.js';
 
 const router = Router();
 
-// Apply auth middleware to all routes
-router.use(requireAuth);
-
 /**
  * TOOL-BASED PLANNING
  * Give APIM everything + available tools, let it decide what to do
@@ -799,6 +796,15 @@ export async function processResearch(
 // Routes
 // ============================================================================
 
+// Apply auth to all routes EXCEPT /stream/:id (which is defined separately below)
+router.use((req, res, next) => {
+  // Skip auth for stream endpoint (EventSource can't send headers)
+  if (req.path.match(/^\/stream\//)) {
+    return next();
+  }
+  return requireAuth(req, res, next);
+});
+
 /**
  * POST /research/start
  * Create a new research run and start processing
@@ -922,20 +928,16 @@ router.post('/start', async (req, res) => {
 router.get('/stream/:id', async (req, res) => {
   try {
     const runId = req.params.id;
-    const userId = req.auth?.sub as string;
+    const userId = req.auth?.sub as string; // Optional - EventSource can't send auth headers
     
-    if (!userId) {
-      return res.status(401).json({ error: 'User ID not found in token' });
-    }
+    console.log('[Research] Stream requested:', { runId, userId: userId || 'none' });
     
-    console.log('[Research] Stream requested:', { runId, userId });
-    
-    // Verify run exists and belongs to user
+    // Fetch run by runId only (runId is crypto-random, acts as access token)
     const result = await dbQuery(
       `SELECT id, user_id, query, status, uploaded_files, depth, metadata
        FROM o1_research_runs
-       WHERE id = $1 AND user_id = $2`,
-      [runId, userId]
+       WHERE id = $1`,
+      [runId]
     );
 
     if (result.rows.length === 0) {
