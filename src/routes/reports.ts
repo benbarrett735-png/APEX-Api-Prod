@@ -149,30 +149,31 @@ YOUR JOB:
 4. CREATE a step-by-step execution plan using available tools
 
 CRITICAL RULES FOR REPORTS:
-- Reports should be FOCUSED and DATA-DRIVEN
+- Reports should be FOCUSED and DATA-DRIVEN, NOT encyclopedic
 - If user uploaded documents, analyze them FIRST and prefer document data
-- ONLY use search_web if critical data is missing (limit to 1-2 searches max!)
-- Chart types requested by user: ${selectedCharts && selectedCharts.length > 0 ? selectedCharts.join(', ') : 'none specified - suggest valuable ones'}
-- Report length: ${reportLength} (short=2-3 sections, medium=4-6 sections, long=7-10 sections)
+- ONLY use search_web if critical data is missing (limit to 1 search ONLY!)
+- Chart types requested by user: ${selectedCharts && selectedCharts.length > 0 ? selectedCharts.join(', ') : 'none specified - suggest 1-2 valuable ones'}
+- Report length: ${reportLength} (short=2-3 sections MAX, medium=3-4 sections MAX, long=4-5 sections MAX)
 ${reportFocus ? `- Report focus: ${reportFocus}` : ''}
-- Include charts that add REAL VALUE (not decorative) - limit to 2-3 max
-- Structure should be logical: Context → Analysis → Insights → Recommendations
+- Include charts that add REAL VALUE (not decorative) - limit to 1-2 max
+- Structure should be logical: Executive Summary → Analysis → Recommendations (3 sections is ideal)
 
 AVAILABLE TOOLS:
 ${tools.map(t => `- ${t.name}: ${t.description}`).join('\n')}
 
 PLANNING STRATEGY (KEEP IT EFFICIENT!):
 1. If documents provided: Start with analyze_documents (MOST IMPORTANT!)
-2. ONLY search_web if CRITICAL data is missing (1-2 searches MAX!)
-3. Plan charts: Use generate_chart ONLY for key visualizations (2-3 MAX!)
-4. Plan sections: Use draft_section for each report section (3-5 sections)
+2. ONLY search_web if CRITICAL data is missing (1 search ONLY!)
+3. Plan charts: Use generate_chart ONLY for key visualizations (1-2 MAX!)
+4. Plan sections: Use draft_section for ONLY 3-4 sections (NOT MORE!)
 5. Finalize: Use compile_report to assemble everything
 
-EFFICIENCY RULES:
+EFFICIENCY RULES (STRICT ENFORCEMENT):
 - Prefer document data over web search
-- Limit search_web to 1-2 calls MAXIMUM
-- Limit generate_chart to 2-3 calls MAXIMUM
-- Keep total tools under 10 steps
+- search_web: 0-1 calls ONLY (skip if documents have enough data)
+- generate_chart: 1-2 calls MAXIMUM (not 3+)
+- draft_section: 3-4 calls MAXIMUM (NOT 5, 6, 7+)
+- Keep total tool calls under 8 steps
 
 OUTPUT FORMAT (STRICT JSON):
 {
@@ -883,6 +884,20 @@ Be specific and cite the source documents.`;
             ...artifacts.webFindings.map((f: any) => `SEARCH: ${f.query}\nFINDINGS: ${f.findings}`)
           ].join('\n\n---\n\n');
 
+          // ✅ ENFORCE STRICT LENGTH LIMITS based on reportLength
+          const lengthGuidelines = {
+            short: { maxWords: 150, style: 'Be extremely concise. Only the most critical points.' },
+            medium: { maxWords: 300, style: 'Be clear and focused. Key insights only.' },
+            long: { maxWords: 500, style: 'Be thorough but avoid redundancy.' }
+          };
+          
+          const guideline = lengthGuidelines[reportLength as keyof typeof lengthGuidelines] || lengthGuidelines.medium;
+          
+          // ✅ LIMIT DATA CONTEXT (prevent overwhelming APIM with too much data)
+          const limitedData = allData.length > 2000 
+            ? allData.substring(0, 2000) + '\n\n[Additional data truncated for conciseness]'
+            : allData;
+
           const sectionPrompt = `Write the "${sectionName}" section for a ${reportLength} report.
 
 REPORT GOAL: ${goal}
@@ -890,13 +905,15 @@ ${reportFocus ? `FOCUS: ${reportFocus}\n` : ''}
 
 SECTION FOCUS: ${sectionFocus}
 
-AVAILABLE DATA:
-${allData}
+LENGTH REQUIREMENT: Maximum ${guideline.maxWords} words. ${guideline.style}
 
-Write a comprehensive, data-driven section. Include specific facts, insights, and recommendations where appropriate.`;
+AVAILABLE DATA:
+${limitedData}
+
+Write a focused, data-driven section. Use bullet points where appropriate. DO NOT exceed ${guideline.maxWords} words.`;
 
           const sectionResponse: any = await callAPIM([
-            { role: 'system', content: 'You are an expert report writer. Create clear, comprehensive sections with data-driven insights.' },
+            { role: 'system', content: `You are an expert report writer. Create clear, CONCISE sections with data-driven insights. CRITICAL: Stay under the word limit. Use bullet points. Be direct.` },
             { role: 'user', content: sectionPrompt }
           ]);
 
