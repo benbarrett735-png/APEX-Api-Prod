@@ -148,23 +148,29 @@ router.post('/runs', async (req, res) => {
  */
 /**
  * GET /agentic-flow/runs/:runId?cursor=N
- * Cursor-based polling endpoint (Portal-compatible)
+ * Dual-mode polling endpoint (Portal-compatible)
  * 
- * Handles BOTH research (run_*) and agent (rpt_*, tpl_*, chart-*) runs
- * Returns incremental events since last cursor position
+ * TWO BEHAVIORS:
+ * 1. WITH cursor param (?cursor=N) → Returns incremental items (research/reports/templates)
+ * 2. WITHOUT cursor param → Returns full status (charts - legacy format)
+ * 
+ * This supports Portal's dual polling mechanism until charts migrates to cursor-based
  */
 router.get('/runs/:runId', requireAuth, async (req, res) => {
   try {
     const { runId } = req.params;
-    const cursor = parseInt(req.query.cursor as string) || 0;
     const userId = req.auth?.sub as string;
+    const hasCursor = req.query.cursor !== undefined;
+    const cursor = parseInt(req.query.cursor as string) || 0;
     
-    console.log(`[Cursor Poll] runId=${runId}, cursor=${cursor}, userId=${userId}`);
+    console.log(`[Poll] runId=${runId}, cursor=${hasCursor ? cursor : 'NONE'}, userId=${userId}`);
     
-    // Detect type from runId prefix
-    const isResearch = runId.startsWith('run_');
-    
-    if (isResearch) {
+    // BRANCH 1: Cursor-based polling (research, reports, templates)
+    if (hasCursor) {
+      // Detect type from runId prefix
+      const isResearch = runId.startsWith('run_');
+      
+      if (isResearch) {
       // Research mode - use o1_research tables
       const runResult = await dbQuery(
         `SELECT status, query as goal, started_at, finished_at 
@@ -350,10 +356,76 @@ router.get('/runs/:runId', requireAuth, async (req, res) => {
         status: run.status,
         goal: run.goal
       });
+      }
+    } 
+    
+    // BRANCH 2: Status-based polling (charts - legacy format)
+    else {
+      console.log(`[Poll] Status-based (Charts legacy) - runId=${runId}`);
+      
+      // Get run status from agentic_runs
+      const runResult = await dbQuery(
+        `SELECT run_id, goal, status, started_at, finished_at 
+         FROM agentic_runs 
+         WHERE run_id = $1 AND user_id = $2`,
+        [runId, userId]
+      );
+      
+      if (runResult.rows.length === 0) {
+        return res.status(404).json({ error: 'Run not found' });
+      }
+      
+      const run = runResult.rows[0];
+      
+      // Get all steps
+      const stepsResult = await dbQuery(
+        `SELECT step_id, action_name, status, started_at, finished_at, result_summary
+         FROM agentic_steps
+         WHERE run_id = $1
+         ORDER BY started_at ASC`,
+        [runId]
+      );
+      
+      // Get all artifacts
+      const artifactsResult = await dbQuery(
+        `SELECT artifact_key, uri, type, meta
+         FROM agentic_artifacts
+         WHERE run_id = $1
+         ORDER BY created_at ASC`,
+        [runId]
+      );
+      
+      // Get report content (if completed)
+      let reportContent = null;
+      if (run.status === 'completed') {
+        // Check for report artifact
+        const reportArtifact = artifactsResult.rows.find((a: any) => 
+          a.type === 'report' || a.artifact_key === 'final_report'
+        );
+        if (reportArtifact && reportArtifact.uri) {
+          // Extract content from URI if it's embedded
+          if (reportArtifact.uri.startsWith('data:')) {
+            reportContent = reportArtifact.meta?.content || reportArtifact.uri;
+          }
+        }
+      }
+      
+      console.log(`[Poll] Status-based returning: status=${run.status}, steps=${stepsResult.rows.length}, artifacts=${artifactsResult.rows.length}`);
+      
+      return res.json({
+        status: run.status,
+        run_id: run.run_id,
+        goal: run.goal,
+        report_content: reportContent,
+        steps: stepsResult.rows,
+        artifacts: artifactsResult.rows,
+        started_at: run.started_at,
+        finished_at: run.finished_at
+      });
     }
 
   } catch (error: any) {
-    console.error('[Cursor Poll] Error:', error);
+    console.error('[Poll] Error:', error);
     res.status(500).json({ error: error.message });
   }
 });
