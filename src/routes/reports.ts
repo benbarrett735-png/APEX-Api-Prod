@@ -416,7 +416,7 @@ router.get('/stream/:runId', async (req, res) => {
     }
   };
 
-  // Keep-alive ping to prevent timeout (every 5 seconds for App Runner/Amplify proxies)
+  // Keep-alive ping to prevent timeout (every 2 seconds for aggressive proxies)
   const keepAliveInterval = setInterval(() => {
     try {
       res.write(`: keepalive\n\n`);
@@ -427,7 +427,7 @@ router.get('/stream/:runId', async (req, res) => {
       console.error('[Reports] Keep-alive write failed:', err);
       clearInterval(keepAliveInterval);
     }
-  }, 5000);
+  }, 2000);
 
   try {
     // Get run details
