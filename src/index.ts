@@ -7,6 +7,7 @@ import adiRouter from "./routes/adi.js";
 import agenticFlowRouter from "./routes/agentic-flow.js";
 import outputsRouter from "./routes/outputs.js";
 import researchRouter from "./routes/research.js";
+import researchPollingRouter from "./routes/research-polling.js";
 import reportsRouter from "./routes/reports.js";
 import chartsRouter from "./routes/charts.js";
 import templatesRouter from "./routes/templates.js";
@@ -41,6 +42,9 @@ app.use("/outputs", outputsRouter);
 
 // ✅ Research routes (tool-based research with o1-style thinking)
 app.use("/research", researchRouter);
+
+// ✅ Research Polling routes (start → poll → append pattern, no SSE)
+app.use("/research-polling", researchPollingRouter);
 
 // ✅ Reports routes (tool-based report generation with charts)
 app.use("/reports", reportsRouter);
