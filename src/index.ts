@@ -7,7 +7,6 @@ import adiRouter from "./routes/adi.js";
 import agenticFlowRouter from "./routes/agentic-flow.js";
 import outputsRouter from "./routes/outputs.js";
 import researchRouter from "./routes/research.js";
-import pollingBridgeRouter from "./routes/polling-bridge.js";
 import reportsRouter from "./routes/reports.js";
 import chartsRouter from "./routes/charts.js";
 import templatesRouter from "./routes/templates.js";
@@ -40,14 +39,10 @@ app.use("/agentic-flow", agenticFlowRouter);
 // ✅ Outputs routes (save generated content to files)
 app.use("/outputs", outputsRouter);
 
-// ✅ Research routes (tool-based research with o1-style thinking) - UNCHANGED
+// ✅ Research routes (tool-based research with o1-style thinking)
 app.use("/research", researchRouter);
 
-// ✅ Polling Bridge - READ ONLY polling of existing results (no changes to logic)
-// Portal calls /api/runs/:id which proxies to this
-app.use("/runs", pollingBridgeRouter);
-
-// ✅ Reports routes (tool-based report generation with charts) - UNCHANGED
+// ✅ Reports routes (tool-based report generation with charts)
 app.use("/reports", reportsRouter);
 
 // ✅ Charts routes (serves generated chart images)

@@ -146,15 +146,214 @@ router.post('/runs', async (req, res) => {
 /**
  * Get run status and details
  */
-router.get('/runs/:runId', async (req, res) => {
+/**
+ * GET /agentic-flow/runs/:runId?cursor=N
+ * Cursor-based polling endpoint (Portal-compatible)
+ * 
+ * Handles BOTH research (run_*) and agent (rpt_*, tpl_*, chart-*) runs
+ * Returns incremental events since last cursor position
+ */
+router.get('/runs/:runId', requireAuth, async (req, res) => {
   try {
     const { runId } = req.params;
+    const cursor = parseInt(req.query.cursor as string) || 0;
+    const userId = req.auth?.sub as string;
     
-    const status = await AgenticFlow.getRunStatus(runId);
-    res.json(status);
+    console.log(`[Cursor Poll] runId=${runId}, cursor=${cursor}, userId=${userId}`);
+    
+    // Detect type from runId prefix
+    const isResearch = runId.startsWith('run_');
+    
+    if (isResearch) {
+      // Research mode - use o1_research tables
+      const runResult = await dbQuery(
+        `SELECT status, query as goal, started_at, finished_at 
+         FROM o1_research_runs 
+         WHERE id = $1 AND user_id = $2`,
+        [runId, userId]
+      );
+      
+      if (runResult.rows.length === 0) {
+        return res.status(404).json({ error: 'Research run not found' });
+      }
+      
+      const run = runResult.rows[0];
+      const isDone = run.status === 'completed' || run.status === 'error';
+      
+      // Get new activities since cursor
+      const activitiesResult = await dbQuery(
+        `SELECT id, activity_type, activity_data 
+         FROM o1_research_activities 
+         WHERE run_id = $1 AND id > $2 
+         ORDER BY id ASC 
+         LIMIT 100`,
+        [runId, cursor]
+      );
+      
+      // Transform activities to Portal format
+      const items = activitiesResult.rows.map((activity: any) => {
+        const data = activity.activity_data || {};
+        
+        switch (activity.activity_type) {
+          case 'thinking':
+            return {
+              type: 'thinking',
+              thought: data.thought || 'Processing...',
+              thought_type: data.thought_type || 'planning'
+            };
+            
+          case 'tool.call':
+            return {
+              type: 'tool_call',
+              tool: data.tool,
+              purpose: data.purpose
+            };
+            
+          case 'tool.result':
+            return {
+              type: 'tool_result',
+              tool: data.tool,
+              findings_count: data.findings_count || 0
+            };
+            
+          case 'section.completed':
+            return {
+              type: 'section_completed',
+              section: data.section,
+              preview: data.preview
+            };
+            
+          case 'research.completed':
+            return {
+              type: 'completed',
+              content: data.report_content
+            };
+            
+          default:
+            return {
+              type: activity.activity_type,
+              ...data
+            };
+        }
+      });
+      
+      const newCursor = activitiesResult.rows.length > 0 
+        ? activitiesResult.rows[activitiesResult.rows.length - 1].id 
+        : cursor;
+      
+      console.log(`[Cursor Poll] Research: ${items.length} items, cursor=${newCursor}, done=${isDone}`);
+      
+      return res.json({
+        items,
+        cursor: newCursor,
+        done: isDone,
+        status: run.status,
+        goal: run.goal
+      });
+      
+    } else {
+      // Agent mode (reports, templates, charts) - use agentic tables
+      const runResult = await dbQuery(
+        `SELECT status, goal, started_at, finished_at 
+         FROM agentic_runs 
+         WHERE run_id = $1 AND user_id = $2`,
+        [runId, userId]
+      );
+      
+      if (runResult.rows.length === 0) {
+        return res.status(404).json({ error: 'Run not found' });
+      }
+      
+      const run = runResult.rows[0];
+      const isDone = run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled';
+      
+      // Get new events since cursor (using BIGSERIAL id as cursor)
+      const eventsResult = await dbQuery(
+        `SELECT id, event_type, payload, ts 
+         FROM agentic_events 
+         WHERE run_id = $1 AND id > $2 
+         ORDER BY id ASC 
+         LIMIT 100`,
+        [runId, cursor]
+      );
+      
+      // Transform events to Portal format
+      const items = eventsResult.rows.map((event: any) => {
+        const payload = event.payload || {};
+        
+        // Map our event types to Portal's expected types
+        switch (event.event_type) {
+          case 'thinking':
+          case 'thought':
+            return {
+              type: 'thinking',
+              thought: payload.thought || payload.text || 'Processing...',
+              thought_type: payload.thought_type || 'planning'
+            };
+            
+          case 'tool_call':
+          case 'tool.started':
+            return {
+              type: 'tool_call',
+              tool: payload.tool || payload.tool_name,
+              purpose: payload.purpose || payload.reasoning
+            };
+            
+          case 'tool_result':
+          case 'tool.completed':
+            return {
+              type: 'tool_result',
+              tool: payload.tool || payload.tool_name,
+              findings_count: payload.findings_count || payload.results?.length || 0
+            };
+            
+          case 'text_delta':
+          case 'output_chunk':
+            return {
+              type: 'text_delta',
+              text: payload.text || payload.content
+            };
+            
+          case 'section_completed':
+            return {
+              type: 'section_completed',
+              section: payload.section,
+              preview: payload.preview
+            };
+            
+          case 'completed':
+            return {
+              type: 'completed',
+              content: payload.content || payload.report_content
+            };
+            
+          default:
+            // Pass through unknown events
+            return {
+              type: event.event_type,
+              ...payload
+            };
+        }
+      });
+      
+      // Get highest event ID as new cursor
+      const newCursor = eventsResult.rows.length > 0 
+        ? eventsResult.rows[eventsResult.rows.length - 1].id 
+        : cursor;
+      
+      console.log(`[Cursor Poll] Agent: ${items.length} items, cursor=${newCursor}, done=${isDone}`);
+      
+      return res.json({
+        items,
+        cursor: newCursor,
+        done: isDone,
+        status: run.status,
+        goal: run.goal
+      });
+    }
 
   } catch (error: any) {
-    console.error('Error getting run status:', error);
+    console.error('[Cursor Poll] Error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -666,7 +865,7 @@ router.post('/:runId/regenerate', async (req, res) => {
 
     // Create the run using the static method
     const newRunId = await AgenticFlow.createRun(userId, modifiedGoal, 'charts');
-    
+
     console.log('[AgenticFlow Regenerate] Created new run:', newRunId);
 
     // Start async regeneration - create flow and execute
