@@ -982,11 +982,13 @@ router.get('/stream/:id', async (req, res) => {
         await new Promise(resolve => setTimeout(resolve, 50));
       };
       
-      // Keep-alive ping to prevent timeout (every 1 second with REAL events, not comments)
+      // Keep-alive with progress updates (every 2 seconds)
+      let pingCount = 0;
       keepAliveInterval = setInterval(() => {
       try {
-        // Send actual event (not comment) so proxies don't strip it
-        res.write(`event: ping\ndata: {"timestamp":${Date.now()}}\n\n`);
+        pingCount++;
+        // Send progress event (not just ping) so CloudFront passes it through
+        res.write(`event: thinking\ndata: {"thought":"Processing...","thought_type":"progress","ping":${pingCount}}\n\n`);
         if ((res as any).flush) {
           (res as any).flush();
         }
@@ -996,7 +998,7 @@ router.get('/stream/:id', async (req, res) => {
           clearInterval(keepAliveInterval);
         }
       }
-      }, 1000);
+      }, 2000);
       
       // Clean up on connection close
       req.on('close', () => {

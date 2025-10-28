@@ -229,11 +229,13 @@ router.get('/runs/:runId/stream', async (req, res) => {
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   };
 
-  // Keep-alive ping to prevent timeout (every 1 second with REAL events, not comments)
+  // Keep-alive with progress updates (every 2 seconds)
+  let pingCount = 0;
   const keepAliveInterval = setInterval(() => {
     try {
-      // Send actual event (not comment) so proxies don't strip it
-      res.write(`event: ping\ndata: {"timestamp":${Date.now()}}\n\n`);
+      pingCount++;
+      // Send progress event so CloudFront doesn't timeout
+      res.write(`event: progress\ndata: {"status":"processing","ping":${pingCount}}\n\n`);
       if ((res as any).flush) {
         (res as any).flush();
       }
@@ -241,7 +243,7 @@ router.get('/runs/:runId/stream', async (req, res) => {
       console.error('[AgenticFlow] Keep-alive write failed:', err);
       clearInterval(keepAliveInterval);
     }
-  }, 1000);
+  }, 2000);
 
   try {
     // Send initial run state
