@@ -109,7 +109,8 @@ router.post('/runs', async (req, res) => {
     }
 
     res.json({ 
-      run_id: runId,
+      runId: runId,  // Portal expects camelCase "runId"
+      run_id: runId, // Keep for backward compatibility
       message: 'Agentic flow run created successfully'
     });
     
