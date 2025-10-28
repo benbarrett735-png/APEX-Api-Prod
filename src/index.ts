@@ -8,6 +8,7 @@ import agenticFlowRouter from "./routes/agentic-flow.js";
 import outputsRouter from "./routes/outputs.js";
 import researchRouter from "./routes/research.js";
 import researchPollingRouter from "./routes/research-polling.js";
+import unifiedPollingRouter from "./routes/unified-polling.js";
 import reportsRouter from "./routes/reports.js";
 import chartsRouter from "./routes/charts.js";
 import templatesRouter from "./routes/templates.js";
@@ -45,6 +46,9 @@ app.use("/research", researchRouter);
 
 // ✅ Research Polling routes (start → poll → append pattern, no SSE)
 app.use("/research-polling", researchPollingRouter);
+
+// ✅ Unified Polling routes (all agent types: research, reports, templates, charts)
+app.use("/agent-runs", unifiedPollingRouter);
 
 // ✅ Reports routes (tool-based report generation with charts)
 app.use("/reports", reportsRouter);

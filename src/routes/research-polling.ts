@@ -157,8 +157,8 @@ async function processResearchPolling(runId: string): Promise<void> {
 }
 
 /**
- * Wrapper around existing research logic with item emission
- * TODO: Integrate with existing researchService.ts
+ * Process research with direct emission
+ * Maps existing research SSE events → polling items
  */
 async function processResearchWithEmitter(
   query: string,
@@ -167,37 +167,125 @@ async function processResearchWithEmitter(
   emit: (item: agentStore.AgentItem) => Promise<void>
 ): Promise<{ report: string; sources: string[]; charts: any }> {
   
-  // Emit thinking
-  await emit({
-    t: 'status',
-    stage: 'thinking',
-    label: 'Analyzing query...'
-  });
+  // Import existing research processing
+  const { searchWeb } = await import('../services/openaiSearch.js');
+  const { callAPIM } = await import('../services/agenticFlow.js');
   
-  // TODO: Call existing research logic
-  // For now, placeholder that emits progress
-  
-  await emit({
-    t: 'status',
-    stage: 'searching',
-    label: 'Searching web...'
-  });
-  
-  await new Promise(resolve => setTimeout(resolve, 2000));
-  
-  await emit({
-    t: 'status',
-    stage: 'synthesizing',
-    label: 'Generating report...'
-  });
-  
-  await new Promise(resolve => setTimeout(resolve, 2000));
-  
-  return {
-    report: `# Research Report: ${query}\n\nPlaceholder report content.`,
-    sources: [],
-    charts: {}
-  };
+  try {
+    // Emit planning
+    await emit({
+      t: 'status',
+      stage: 'planning',
+      label: 'Planning research approach...'
+    });
+    
+    // Create research plan via APIM
+    const planPrompt = `Create a research plan for: "${query}". 
+Depth: ${depth}. 
+Documents: ${uploadedFiles.length} uploaded.
+
+Output JSON with:
+- understanding: { coreSubject, userGoal, needsExternal, needsDocAnalysis }
+- searches: [ { query: "...", reasoning: "..." } ]
+- reportSections: [ "..." ]`;
+    
+    const planMessages = [
+      { role: 'system', content: 'You are a research planning assistant. Output valid JSON only.' },
+      { role: 'user', content: planPrompt }
+    ];
+    
+    await emit({
+      t: 'status',
+      stage: 'analyzing',
+      label: 'Analyzing research approach...'
+    });
+    
+    const planResponse = await callAPIM(planMessages);
+    let plan: any;
+    
+    try {
+      const content = planResponse.choices[0].message.content;
+      plan = JSON.parse(content);
+    } catch (e) {
+      // Fallback plan
+      plan = {
+        understanding: { coreSubject: query, userGoal: `Research ${query}` },
+        searches: [{ query, reasoning: 'Main search' }],
+        reportSections: ['Overview', 'Key Findings', 'Conclusion']
+      };
+    }
+    
+    // Execute web searches
+    const allFindings: string[] = [];
+    const sources: string[] = [];
+    
+    if (plan.searches && plan.searches.length > 0) {
+      await emit({
+        t: 'status',
+        stage: 'searching',
+        label: `Searching web (${plan.searches.length} searches)...`
+      });
+      
+      for (let i = 0; i < Math.min(plan.searches.length, 3); i++) {
+        const search = plan.searches[i];
+        try {
+          const searchResult = await searchWeb(search.query);
+          allFindings.push(...searchResult.findings);
+          sources.push(...searchResult.sources);
+          
+          await emit({
+            t: 'status',
+            stage: 'searching',
+            label: `Search ${i + 1}/${plan.searches.length}: ${searchResult.findings.length} findings`
+          });
+        } catch (err) {
+          console.error('[Research Polling] Search error:', err);
+        }
+      }
+    }
+    
+    // Generate report
+    await emit({
+      t: 'status',
+      stage: 'synthesizing',
+      label: 'Generating report...'
+    });
+    
+    const reportPrompt = `Generate a ${depth} research report on: "${query}"
+
+Findings:
+${allFindings.slice(0, 20).join('\n')}
+
+Sources:
+${sources.slice(0, 10).join('\n')}
+
+Structure:
+${(plan.reportSections || ['Overview', 'Findings', 'Conclusion']).join(', ')}
+
+Requirements:
+- ${depth === 'short' ? '300-500' : depth === 'long' ? '1000-1500' : '600-900'} words
+- Markdown format
+- Cite sources
+- Professional tone`;
+    
+    const reportMessages = [
+      { role: 'system', content: 'You are a research report writer. Create comprehensive, well-structured reports.' },
+      { role: 'user', content: reportPrompt }
+    ];
+    
+    const reportResponse = await callAPIM(reportMessages);
+    const report = reportResponse.choices[0].message.content;
+    
+    return {
+      report,
+      sources: Array.from(new Set(sources)).slice(0, 10),
+      charts: {}
+    };
+    
+  } catch (error: any) {
+    console.error('[Research Polling] Processing error:', error);
+    throw error;
+  }
 }
 
 export default router;
