@@ -984,16 +984,18 @@ router.get('/stream/:id', async (req, res) => {
       
       // Keep-alive with progress updates (every 2 seconds)
       let pingCount = 0;
+      console.log('[Research] ✅ KEEP-ALIVE INTERVAL STARTING (every 2s)');
       keepAliveInterval = setInterval(() => {
       try {
         pingCount++;
+        console.log(`[Research] 📡 Keep-alive ping #${pingCount} sent`);
         // Send progress event (not just ping) so CloudFront passes it through
         res.write(`event: thinking\ndata: {"thought":"Processing...","thought_type":"progress","ping":${pingCount}}\n\n`);
         if ((res as any).flush) {
           (res as any).flush();
         }
       } catch (err) {
-        console.error('[Research] Keep-alive write failed:', err);
+        console.error('[Research] ❌ Keep-alive write failed:', err);
         if (keepAliveInterval) {
           clearInterval(keepAliveInterval);
         }

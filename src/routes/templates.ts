@@ -165,13 +165,15 @@ router.get('/stream/:runId', async (req, res) => {
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   };
 
-  // Keep-alive with progress updates (every 2 seconds)
-  let pingCount = 0;
-  const keepAliveInterval = setInterval(() => {
-    try {
-      pingCount++;
-      // Send progress event so CloudFront doesn't timeout
-      res.write(`event: template.progress\ndata: {"status":"processing","ping":${pingCount}}\n\n`);
+    // Keep-alive with progress updates (every 2 seconds)
+    let pingCount = 0;
+    console.log('[Templates] ✅ KEEP-ALIVE INTERVAL STARTING (every 2s)');
+    const keepAliveInterval = setInterval(() => {
+      try {
+        pingCount++;
+        console.log(`[Templates] 📡 Keep-alive ping #${pingCount} sent`);
+        // Send progress event so CloudFront doesn't timeout
+        res.write(`event: template.progress\ndata: {"status":"processing","ping":${pingCount}}\n\n`);
       if ((res as any).flush) {
         (res as any).flush();
       }
