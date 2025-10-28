@@ -1325,7 +1325,7 @@ export class AgenticFlow {
     
     // Call the existing chart service
     try {
-      const { ChartService } = await import('../services/chartService');
+      const { ChartService } = await import('./chartService.js');
       const chartService = new ChartService();
       
       const chartRequest = {

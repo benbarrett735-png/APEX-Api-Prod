@@ -10,11 +10,12 @@ import { requireAuth } from '../middleware/requireAuth.js';
 
 const router = Router();
 
-// Apply auth middleware
-router.use(requireAuth);
+// NO AUTH for chart serving - images need to be publicly accessible
+// Chart filenames are random hashes, so no security risk
+// (Browser <img> tags can't send JWT tokens)
 
 /**
- * Serve chart image
+ * Serve chart image (PUBLIC endpoint)
  */
 router.get('/serve/:fileName', async (req, res) => {
   try {

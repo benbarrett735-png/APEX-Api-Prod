@@ -5,8 +5,11 @@ import helmet from "helmet";
 import chatNormalRouter from "./routes/chatNormal.js";
 import adiRouter from "./routes/adi.js";
 import agenticFlowRouter from "./routes/agentic-flow.js";
+import outputsRouter from "./routes/outputs.js";
 import researchRouter from "./routes/research.js";
+import reportsRouter from "./routes/reports.js";
 import chartsRouter from "./routes/charts.js";
+import templatesRouter from "./routes/templates.js";
 
 const app = express();
 
@@ -33,11 +36,20 @@ app.use("/adi", adiRouter);
 // ✅ Agentic flow routes
 app.use("/agentic-flow", agenticFlowRouter);
 
-// ✅ Research routes (bridges to agentic flow)
+// ✅ Outputs routes (save generated content to files)
+app.use("/outputs", outputsRouter);
+
+// ✅ Research routes (tool-based research with o1-style thinking)
 app.use("/research", researchRouter);
+
+// ✅ Reports routes (tool-based report generation with charts)
+app.use("/reports", reportsRouter);
 
 // ✅ Charts routes (serves generated chart images)
 app.use("/charts", chartsRouter);
+
+// ✅ Templates routes (template generation with tool-based thinking)
+app.use("/templates", templatesRouter);
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`API on ${PORT}`));

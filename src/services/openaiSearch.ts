@@ -1,12 +1,12 @@
 /**
- * OpenAI Search Service
- * Phase 2: Real external web search using OpenAI
+ * Web Search Service
+ * Uses Serper API for real Google search + GPT-4 for synthesis
  * 
  * Per Kevin's plan:
- * - Use OpenAI ONLY for public web research
+ * - Use Serper for actual web search (real Google results)
+ * - Use GPT-4 for synthesis and structuring
  * - Use APIM for sensitive data processing
- * - Proper error handling
- * - Production-grade timeout/retry logic
+ * - Proper error handling and fallbacks
  */
 
 interface SearchResult {
@@ -15,126 +15,226 @@ interface SearchResult {
   sources: string[];
 }
 
+interface SerperResult {
+  organic?: Array<{
+    title: string;
+    link: string;
+    snippet: string;
+    date?: string;
+  }>;
+  answerBox?: {
+    answer?: string;
+    snippet?: string;
+    title?: string;
+  };
+  knowledgeGraph?: {
+    title?: string;
+    description?: string;
+    attributes?: Record<string, string>;
+  };
+}
+
 /**
- * Search the public web using OpenAI
- * Returns structured findings for the research query
+ * Search the public web using Serper API (real Google results)
+ * Then synthesize findings using GPT-4
  */
 export async function searchWeb(query: string): Promise<SearchResult> {
+  const SERPER_API_KEY = process.env.SERPER_API_KEY;
   const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+  
+  if (!SERPER_API_KEY) {
+    throw new Error('SERPER_API_KEY not configured. Sign up at https://serper.dev');
+  }
   
   if (!OPENAI_API_KEY) {
     throw new Error('OPENAI_API_KEY not configured');
   }
 
-  // Create search prompt - MORE AGGRESSIVE
-  const searchPrompt = `You are a research assistant conducting COMPREHENSIVE web research.
+  try {
+    // Step 1: Get real search results from Serper (Google)
+    console.log('[Web Search] Searching Google via Serper:', query);
+    
+    const serperController = new AbortController();
+    const serperTimeout = setTimeout(() => serperController.abort(), 10000); // 10s for search
 
-Research Query: "${query}"
+    const serperResponse = await fetch('https://google.serper.dev/search', {
+      method: 'POST',
+      headers: {
+        'X-API-KEY': SERPER_API_KEY,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        q: query,
+        num: 10, // Get top 10 results
+      }),
+      signal: serperController.signal
+    });
+
+    clearTimeout(serperTimeout);
+
+    if (!serperResponse.ok) {
+      const errorText = await serperResponse.text();
+      throw new Error(`Serper API error: ${serperResponse.status} - ${errorText}`);
+    }
+
+    const serperData = await serperResponse.json() as SerperResult;
+    
+    console.log('[Web Search] Serper results:', {
+      organicCount: serperData.organic?.length || 0,
+      hasAnswerBox: !!serperData.answerBox,
+      hasKnowledgeGraph: !!serperData.knowledgeGraph
+    });
+
+    // Step 2: Extract relevant content from search results
+    let searchContext = '';
+    
+    // Add answer box if available
+    if (serperData.answerBox) {
+      searchContext += `\n**Direct Answer:**\n${serperData.answerBox.answer || serperData.answerBox.snippet || ''}\n`;
+    }
+    
+    // Add knowledge graph if available
+    if (serperData.knowledgeGraph) {
+      const kg = serperData.knowledgeGraph;
+      searchContext += `\n**Knowledge Graph:**\nTitle: ${kg.title || ''}\nDescription: ${kg.description || ''}\n`;
+      if (kg.attributes) {
+        searchContext += Object.entries(kg.attributes)
+          .map(([key, val]) => `${key}: ${val}`)
+          .join('\n');
+      }
+      searchContext += '\n';
+    }
+    
+    // Add organic search results
+    if (serperData.organic && serperData.organic.length > 0) {
+      searchContext += '\n**Search Results:**\n';
+      serperData.organic.slice(0, 10).forEach((result, idx) => {
+        searchContext += `\n${idx + 1}. ${result.title}\n`;
+        searchContext += `   URL: ${result.link}\n`;
+        searchContext += `   ${result.snippet}\n`;
+        if (result.date) {
+          searchContext += `   Date: ${result.date}\n`;
+        }
+      });
+    }
+
+    if (!searchContext.trim()) {
+      throw new Error('No search results found');
+    }
+
+    console.log('[Web Search] Search context length:', searchContext.length);
+
+    // Step 3: Use GPT-4 to synthesize findings from search results
+    const synthesisPrompt = `You are a research assistant analyzing web search results.
+
+Query: "${query}"
+
+Search Results from Google:
+${searchContext}
 
 Task:
-1. Provide a comprehensive summary of current information about this topic
-2. Include 10-15 SPECIFIC findings, data points, statistics, or insights
-3. Focus on recent, relevant information (2024-2025 if applicable)
-4. Be SPECIFIC - include numbers, dates, names, concrete details
-5. Cover MULTIPLE angles - don't just repeat the same type of information
-6. If comparing, provide data for BOTH sides
-7. Include sources for major claims
+1. Provide a comprehensive summary based on these REAL search results
+2. Extract 10-15 SPECIFIC findings from the search results
+3. Include concrete details: names, numbers, dates, locations, facts
+4. Each finding should cite information from the search results
+5. Cover multiple angles and aspects
+6. Be factual - only include information from the results above
 
-IMPORTANT:
-- Don't be generic - provide SPECIFIC, actionable information
-- Include concrete data points, statistics, examples
-- Make each finding UNIQUE (different aspect)
-- Aim for BREADTH and DEPTH
-
-Format your response as JSON:
+Format as JSON:
 {
-  "summary": "Brief overview (2-3 sentences)",
+  "summary": "2-3 sentence overview based on search results",
   "findings": [
-    "Finding 1 with specific data/numbers/context",
-    "Finding 2 from different angle with details",
-    "Finding 3 with concrete example or statistic",
-    ... (10-15 findings total)
+    "Specific finding 1 with concrete details from results",
+    "Specific finding 2 from different aspect",
+    ... (10-15 findings)
   ],
-  "sources": ["Source 1 description", "Source 2...", ...]
+  "sources": ["Source URLs and titles from results above"]
 }`;
 
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
+    const gptController = new AbortController();
+    const gptTimeout = setTimeout(() => gptController.abort(), 20000); // 20s for synthesis
 
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    const gptResponse = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${OPENAI_API_KEY}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'gpt-4',
+        model: 'gpt-4o', // Use latest model for better synthesis
         messages: [
           {
             role: 'system',
-            content: 'You are a research assistant that provides factual, well-sourced information. Always format responses as valid JSON.'
+            content: 'You are a research analyst. Extract and structure information from web search results. Always return valid JSON.'
           },
           {
             role: 'user',
-            content: searchPrompt
+            content: synthesisPrompt
           }
         ],
-        temperature: 0.7,
+        temperature: 0.3, // Lower temp for factual synthesis
         max_tokens: 2000
       }),
-      signal: controller.signal
+      signal: gptController.signal
     });
 
-    clearTimeout(timeoutId);
+    clearTimeout(gptTimeout);
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`OpenAI API error: ${response.status} - ${errorText}`);
+    if (!gptResponse.ok) {
+      const errorText = await gptResponse.text();
+      throw new Error(`GPT-4 synthesis error: ${gptResponse.status} - ${errorText}`);
     }
 
-    const data: any = await response.json();
-    const content = data.choices?.[0]?.message?.content;
+    const gptData: any = await gptResponse.json();
+    const content = gptData.choices?.[0]?.message?.content;
 
     if (!content) {
-      throw new Error('No content in OpenAI response');
+      throw new Error('No content in GPT-4 response');
     }
 
     // Parse JSON response
     let result: SearchResult;
     try {
-      // Extract JSON if wrapped in markdown code blocks
       const jsonMatch = content.match(/```json\n?([\s\S]*?)\n?```/) || content.match(/\{[\s\S]*\}/);
       const jsonStr = jsonMatch ? (jsonMatch[1] || jsonMatch[0]) : content;
       result = JSON.parse(jsonStr);
     } catch (parseError) {
-      // Fallback: treat entire response as summary
-      console.warn('[OpenAI Search] Failed to parse JSON, using raw content');
+      console.warn('[Web Search] Failed to parse GPT-4 JSON, creating structured fallback');
+      // Fallback: extract from raw search results
+      const findings = serperData.organic?.slice(0, 10).map(r => r.snippet) || [];
+      const sources = serperData.organic?.slice(0, 10).map(r => `${r.title} - ${r.link}`) || [];
+      
       result = {
-        summary: content.substring(0, 500),
-        findings: [content],
-        sources: ['OpenAI GPT-4']
+        summary: serperData.answerBox?.snippet || findings[0] || 'Search completed',
+        findings,
+        sources
       };
     }
 
-    // Validate result structure
-    if (!result.summary || !Array.isArray(result.findings)) {
-      throw new Error('Invalid search result structure');
+    // Validate and ensure quality
+    if (!result.summary) {
+      result.summary = 'Search results found for: ' + query;
+    }
+    if (!Array.isArray(result.findings) || result.findings.length === 0) {
+      result.findings = serperData.organic?.slice(0, 10).map(r => r.snippet) || ['No findings extracted'];
+    }
+    if (!Array.isArray(result.sources) || result.sources.length === 0) {
+      result.sources = serperData.organic?.slice(0, 5).map(r => r.link) || [];
     }
 
-    console.log('[OpenAI Search] Success:', {
+    console.log('[Web Search] ✅ Success:', {
       query: query.substring(0, 50),
       findingsCount: result.findings.length,
-      sourcesCount: result.sources?.length || 0
+      sourcesCount: result.sources.length
     });
 
     return result;
 
   } catch (error: any) {
-    console.error('[OpenAI Search] Error:', error);
+    console.error('[Web Search] Error:', error);
 
     if (error.name === 'AbortError') {
-      throw new Error('OpenAI search timed out after 30 seconds');
+      throw new Error('Web search timed out');
     }
 
     throw new Error(`Failed to search: ${error.message}`);
