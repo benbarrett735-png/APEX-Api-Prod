@@ -14,9 +14,6 @@ import { generateTemplateAsync } from './templates.js';
 
 const router = Router();
 
-// Apply auth middleware to all routes
-router.use(requireAuth);
-
 // Helper to generate run IDs with mode-specific prefixes
 function generateRunId(mode: string): string {
   const timestamp = Date.now();
@@ -466,6 +463,12 @@ router.get('/runs/:runId/stream', async (req, res) => {
   }
 });
 
+// ============================================================================
+// APPLY AUTH TO ALL ROUTES BELOW THIS LINE
+// (Stream endpoint above does NOT require auth - EventSource can't send headers)
+// ============================================================================
+router.use(requireAuth);
+
 /**
  * Get run status and details
  */
@@ -803,243 +806,10 @@ router.post('/runs/:runId/cancel', async (req, res) => {
 });
 
 // ============================================================================
-// Real-time Updates (SSE)
+// Follow-up Chat & Regeneration
 // ============================================================================
 
-/**
- * Stream run events via SSE
- */
-router.get('/runs/:runId/stream', async (req, res) => {
-  const { runId } = req.params;
-  
-  // Set up SSE
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  
-  // Helper to send SSE event
-  const sendEvent = (event: string, data: any) => {
-    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-  };
-
-  // Keep-alive with progress updates (every 2 seconds)
-  let pingCount = 0;
-  const keepAliveInterval = setInterval(() => {
-    try {
-      pingCount++;
-      // Send progress event so CloudFront doesn't timeout
-      res.write(`event: progress\ndata: {"status":"processing","ping":${pingCount}}\n\n`);
-      if ((res as any).flush) {
-        (res as any).flush();
-      }
-    } catch (err) {
-      console.error('[AgenticFlow] Keep-alive write failed:', err);
-      clearInterval(keepAliveInterval);
-    }
-  }, 2000);
-
-  try {
-    // Send initial run state
-    const runResult = await dbQuery(`SELECT * FROM agentic_runs WHERE run_id = $1`, [runId]);
-    if (runResult.rows.length === 0) {
-      sendEvent('error', { message: 'Run not found' });
-      clearInterval(keepAliveInterval);
-      res.end();
-      return;
-    }
-
-    const run = runResult.rows[0];
-    sendEvent('run.init', { run });
-
-    // Send all steps
-    const stepsResult = await dbQuery(
-      `SELECT * FROM agentic_steps WHERE run_id = $1 ORDER BY started_at ASC`,
-      [runId]
-    );
-    sendEvent('steps.init', { steps: stepsResult.rows });
-
-    // Send all artifacts
-    const artifactsResult = await dbQuery(
-      `SELECT * FROM agentic_artifacts WHERE run_id = $1 ORDER BY created_at ASC`,
-      [runId]
-    );
-    sendEvent('artifacts.init', { artifacts: artifactsResult.rows });
-
-    // Get last event timestamp
-    let lastEventTs = new Date(0);
-    const lastEventResult = await dbQuery(
-      `SELECT ts FROM agentic_events WHERE run_id = $1 ORDER BY ts DESC LIMIT 1`,
-      [runId]
-    );
-    if (lastEventResult.rows.length > 0) {
-      lastEventTs = new Date(lastEventResult.rows[0].ts);
-    }
-
-    // Poll for new events
-    const pollInterval = setInterval(async () => {
-      try {
-        // Get new events
-        const newEvents = await dbQuery(
-          `SELECT * FROM agentic_events WHERE run_id = $1 AND ts > $2 ORDER BY ts ASC`,
-          [runId, lastEventTs]
-        );
-
-        for (const event of newEvents.rows) {
-          sendEvent(event.event_type, event.payload);
-          lastEventTs = new Date(event.ts);
-        }
-
-        // Check if run is complete
-        const runCheckResult = await dbQuery(
-          `SELECT status FROM agentic_runs WHERE run_id = $1`,
-          [runId]
-        );
-        
-        if (runCheckResult.rows.length > 0) {
-          const status = runCheckResult.rows[0].status;
-          if (status === 'completed' || status === 'failed' || status === 'cancelled') {
-            // Get run mode to determine what content to return
-            const runModeResult = await dbQuery(
-              `SELECT goal, completion_criteria FROM agentic_runs WHERE run_id = $1`,
-              [runId]
-            );
-            const runGoal = runModeResult.rows[0]?.goal || '';
-            const completionCriteria = runModeResult.rows[0]?.completion_criteria || [];
-            
-            // Extract mode from completion criteria
-            let runMode = 'reports'; // Default
-            if (Array.isArray(completionCriteria)) {
-              const modeEntry = completionCriteria.find((c: string) => c.startsWith('mode:'));
-              if (modeEntry) {
-                runMode = modeEntry.split(':')[1];
-              }
-            }
-            
-            let reportContent = null;
-            
-            if (runMode === 'charts') {
-              // CHARTS MODE: Get all generated charts and display them
-              const chartsResult = await dbQuery(
-                `SELECT meta FROM agentic_artifacts WHERE run_id = $1 AND artifact_key LIKE '%chart%' ORDER BY created_at ASC`,
-                [runId]
-              );
-              
-              if (chartsResult.rows.length > 0) {
-                let chartsMarkdown = `# ${runGoal}\n\n`;
-                chartsMarkdown += `**Generated:** ${new Date().toLocaleString()}\n\n`;
-                chartsMarkdown += `---\n\n`;
-                
-                chartsResult.rows.forEach((row, idx) => {
-                  // Parse meta if it's a string (from JSONB column)
-                  const meta = typeof row.meta === 'string' ? JSON.parse(row.meta) : row.meta;
-                  if (meta.chart_url) {
-                    chartsMarkdown += `## ${meta.title || `Chart ${idx + 1}`}\n\n`;
-                    chartsMarkdown += `![${meta.title || `Chart ${idx + 1}`}](${meta.chart_url})\n\n`;
-                    chartsMarkdown += `**Type:** ${meta.chart_type || 'unknown'}\n\n`;
-                    chartsMarkdown += `---\n\n`;
-                  }
-                });
-                
-                reportContent = chartsMarkdown;
-              }
-            } else {
-              // REPORTS MODE: Get the assembled report
-              console.log(`[Streaming] ========== RETRIEVING REPORT ==========`);
-              console.log(`[Streaming] Run ID: ${runId}`);
-              console.log(`[Streaming] Mode: ${runMode}`);
-              
-              // First, let's see what artifacts exist
-              const allArtifacts = await dbQuery(
-                `SELECT artifact_key, type FROM agentic_artifacts WHERE run_id = $1 ORDER BY created_at ASC`,
-                [runId]
-              );
-              console.log(`[Streaming] Found ${allArtifacts.rows.length} total artifacts:`);
-              allArtifacts.rows.forEach(r => console.log(`  - ${r.artifact_key} (type: ${r.type})`));
-              
-              const reportArtifact = await dbQuery(
-                `SELECT artifact_key, meta FROM agentic_artifacts WHERE run_id = $1 AND artifact_key LIKE '%assemble_report%' ORDER BY created_at DESC LIMIT 1`,
-                [runId]
-              );
-              
-              console.log(`[Streaming] Query for assemble_report artifacts returned ${reportArtifact.rows.length} results`);
-              
-              if (reportArtifact.rows.length > 0) {
-                const row = reportArtifact.rows[0];
-                console.log(`[Streaming] Found report artifact: ${row.artifact_key}`);
-                console.log(`[Streaming] Raw meta type:`, typeof row.meta);
-                
-                // Parse meta if it's a string (from JSONB column)
-                const meta = typeof row.meta === 'string' ? JSON.parse(row.meta) : row.meta;
-                
-                console.log(`[Streaming] Parsed meta keys:`, Object.keys(meta));
-                console.log(`[Streaming] Has meta.report:`, !!meta.report);
-                if (meta.report) {
-                  console.log(`[Streaming] Report object keys:`, Object.keys(meta.report));
-                  console.log(`[Streaming] Has full_content:`, !!meta.report.full_content);
-                  reportContent = meta.report.full_content || null;
-                  console.log(`[Streaming] Extracted report content length: ${reportContent ? reportContent.length : 0}`);
-                  if (reportContent) {
-                    console.log(`[Streaming] Report preview (first 200 chars): ${reportContent.substring(0, 200)}`);
-                  }
-                } else {
-                  console.log(`[Streaming] ⚠️ meta.report is undefined`);
-                }
-              } else {
-                console.log(`[Streaming] ⚠️ No assemble_report artifact found, checking for any artifacts with 'report' in key`);
-                const anyReportArtifact = await dbQuery(
-                  `SELECT artifact_key, meta FROM agentic_artifacts WHERE run_id = $1 AND artifact_key LIKE '%report%' ORDER BY created_at DESC LIMIT 1`,
-                  [runId]
-                );
-                if (anyReportArtifact.rows.length > 0) {
-                  const row = anyReportArtifact.rows[0];
-                  console.log(`[Streaming] Found alternative report artifact: ${row.artifact_key}`);
-                  
-                  // Parse meta if it's a string (from JSONB column)
-                  const meta = typeof row.meta === 'string' ? JSON.parse(row.meta) : row.meta;
-                  
-                  reportContent = meta.report?.full_content || null;
-                  console.log(`[Streaming] Found report content in alternative artifact, length: ${reportContent ? reportContent.length : 0}`);
-                } else {
-                  console.log(`[Streaming] ❌ No report artifacts found at all`);
-                }
-              }
-              console.log(`[Streaming] ========== REPORT RETRIEVAL COMPLETE ==========`);
-            }
-            
-            console.log(`[Streaming] ========== SENDING research.complete EVENT ==========`);
-            console.log(`[Streaming] Status: ${status}`);
-            console.log(`[Streaming] Report content: ${reportContent ? `${reportContent.length} chars` : 'null/empty'}`);
-            if (reportContent) {
-              console.log(`[Streaming] Report content preview (first 300 chars):\n${reportContent.substring(0, 300)}`);
-            }
-            console.log(`[Streaming] ========== SENDING EVENT NOW ==========`);
-            
-            sendEvent('research.complete', { status, researchContent: reportContent });
-            clearInterval(pollInterval);
-            clearInterval(keepAliveInterval);
-            res.end();
-          }
-        }
-      } catch (error) {
-        console.error('Error polling events:', error);
-      }
-    }, 1000);
-
-    // Clean up on client disconnect
-    req.on('close', () => {
-      clearInterval(pollInterval);
-      clearInterval(keepAliveInterval);
-      res.end();
-    });
-
-  } catch (error: any) {
-    console.error('Error streaming events:', error);
-    sendEvent('error', { message: error.message });
-    clearInterval(keepAliveInterval);
-    res.end();
-  }
-});
+// (Old stream endpoint removed - unified stream endpoint is defined before auth middleware applies)
 
 // ============================================================================
 // Action Execution (APIM Facade)
