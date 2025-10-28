@@ -165,10 +165,11 @@ router.get('/stream/:runId', async (req, res) => {
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   };
 
-  // Keep-alive ping to prevent timeout (every 2 seconds for aggressive proxies)
+  // Keep-alive ping to prevent timeout (every 1 second with REAL events, not comments)
   const keepAliveInterval = setInterval(() => {
     try {
-      res.write(`: keepalive\n\n`);
+      // Send actual event (not comment) so proxies don't strip it
+      res.write(`event: ping\ndata: {"timestamp":${Date.now()}}\n\n`);
       if ((res as any).flush) {
         (res as any).flush();
       }
@@ -176,7 +177,7 @@ router.get('/stream/:runId', async (req, res) => {
       console.error('[Templates] Keep-alive write failed:', err);
       clearInterval(keepAliveInterval);
     }
-  }, 2000);
+  }, 1000);
 
   try {
     // Get run details
