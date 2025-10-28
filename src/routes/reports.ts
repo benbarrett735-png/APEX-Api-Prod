@@ -543,7 +543,7 @@ router.get('/stream/:runId', async (req, res) => {
 /**
  * Async report generation
  */
-async function generateReportAsync(
+export async function generateReportAsync(
   runId: string,
   userId: string,
   orgId: string,

@@ -342,9 +342,9 @@ export class AgenticFlow {
       console.log(`[AgenticFlow] =================================`);
       
       // Validate that the mode is supported
-      const supportedModes = ['reports', 'charts', 'research'];
+      const supportedModes = ['reports', 'charts', 'research', 'templates'];
       if (!supportedModes.includes(this.mode)) {
-        const errorMsg = `Mode "${this.mode}" is not yet implemented. Only "reports" and "charts" modes are currently available.`;
+        const errorMsg = `Mode "${this.mode}" is not yet implemented. Supported modes: ${supportedModes.join(', ')}`;
         console.error(`[AgenticFlow] ❌ ${errorMsg}`);
         
         await this.logEvent('flow.status', { 

@@ -270,7 +270,7 @@ router.get('/stream/:runId', async (req, res) => {
 /**
  * Async template generation (simple implementation)
  */
-async function generateTemplateAsync(
+export async function generateTemplateAsync(
   runId: string,
   userId: string,
   orgId: string,

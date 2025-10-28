@@ -773,7 +773,7 @@ async function ensureUser(userId: string, email?: string, orgId?: string) {
  * Background research processor
  * Phase 2: Real research execution (runs async from SSE stream)
  */
-async function processResearch(
+export async function processResearch(
   runId: string,
   query: string,
   files: string[] | UploadedFile[],

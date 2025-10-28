@@ -1,17 +1,40 @@
 /**
  * Agentic Flow API Routes
- * Manus.im style agentic flow for chat integration
+ * Unified routing layer for all agent modes (Research, Reports, Templates, Charts)
+ * Per Kevin's plan: Use existing implementations, no duplication
  */
 
-import { Router } from 'express';
+import { Router, Request, Response } from 'express';
 import { AgenticFlow, callAPIM } from '../services/agenticFlow.js';
 import { query as dbQuery } from '../db/query.js';
 import { requireAuth } from '../middleware/requireAuth.js';
+import { processResearch } from './research.js';
+import { generateReportAsync } from './reports.js';
+import { generateTemplateAsync } from './templates.js';
 
 const router = Router();
 
 // Apply auth middleware to all routes
 router.use(requireAuth);
+
+// Helper to generate run IDs with mode-specific prefixes
+function generateRunId(mode: string): string {
+  const timestamp = Date.now();
+  const random = Math.random().toString(36).substr(2, 9);
+  
+  switch (mode) {
+    case 'research':
+      return `run_${timestamp}_${random}`;
+    case 'reports':
+      return `rpt_${timestamp}_${random}`;
+    case 'templates':
+      return `tpl_${timestamp}_${random}`;
+    case 'charts':
+      return `chart-${timestamp}-${random}`;
+    default:
+      return `run_${timestamp}_${random}`;
+  }
+}
 
 /**
  * Helper: Ensure user and org exist (per Kevin's plan - extract from JWT)
@@ -55,11 +78,12 @@ async function ensureUser(userId: string, email?: string, orgId?: string) {
  */
 router.post('/runs', async (req, res) => {
   try {
-    const { goal, mode, completion_criteria, reportLength, reportFocus, selectedCharts, fileContext } = req.body;
+    const { goal, mode, reportLength, reportFocus, selectedCharts, fileContext, depth, templateType } = req.body;
     
     // Extract user from validated JWT (per Kevin's plan)
     const userId = req.auth?.sub as string;
     const email = req.auth?.email as string;
+    const orgId = req.auth?.['custom:org_id'] as string || '00000000-0000-0000-0000-000000000001';
     
     if (!userId) {
       return res.status(401).json({ error: 'User ID not found in token' });
@@ -68,79 +92,370 @@ router.post('/runs', async (req, res) => {
     // Ensure user exists in database
     await ensureUser(userId, email);
     
-    console.log(`[POST /runs] Request received:`);
-    console.log(`  - Goal: ${goal}`);
-    console.log(`  - Mode: ${mode}`);
-    console.log(`  - Selected Charts: ${selectedCharts ? selectedCharts.join(', ') : 'none'}`);
-    console.log(`  - File Context: ${fileContext ? fileContext.length + ' chars' : 'none'}`);
+    console.log(`\n========== [Unified POST /runs] ==========`);
+    console.log(`Goal: ${goal?.substring(0, 50)}`);
+    console.log(`Mode: ${mode}`);
+    console.log(`User: ${userId}`);
+    console.log(`==========================================\n`);
     
     if (!goal) {
       return res.status(400).json({ error: 'Goal is required' });
     }
     
-    // Validate that the mode is supported
-    const supportedModes = ['reports', 'charts', 'research', 'templates', 'plans'];
-    if (mode && !supportedModes.includes(mode)) {
-      return res.status(400).json({ 
-        error: 'Mode not implemented',
-        detail: `Mode "${mode}" is not yet available. Currently supported modes: ${supportedModes.join(', ')}`
-      });
-    }
-
-    const runId = await AgenticFlow.createRun(
-      userId, 
-      goal, 
-      mode || 'general',
-      completion_criteria
-    );
-
-    // Store additional context for reports, charts, and research modes (including file content)
-    if (mode === 'reports' || mode === 'charts' || mode === 'research') {
-      await dbQuery(
-        `INSERT INTO agentic_events (ts, run_id, step_id, event_type, payload)
-         VALUES (NOW(), $1, 'setup', 'context', $2)`,
-        [runId, JSON.stringify({
-          reportLength: mode === 'reports' ? reportLength : undefined,
-          reportFocus: mode === 'reports' ? reportFocus : undefined,
-          selectedCharts: selectedCharts || [],
-          fileContext: fileContext || null // Store parsed file content
-        })]
-      );
-    }
-
-    res.json({ 
-      runId: runId,  // Portal expects camelCase "runId"
-      run_id: runId, // Keep for backward compatibility
-      message: 'Agentic flow run created successfully'
-    });
+    // Generate mode-specific run ID
+    const runId = generateRunId(mode);
     
-    // Force close the response immediately
-    res.end();
-
-    // Explicitly detach execution from request context
-    setImmediate(() => {
-      // Start execution asynchronously AFTER response is closed
-      console.log(`[POST /runs] Starting async execution for run ${runId}`);
-      console.log(`[POST /runs] About to call executeFlowAsync`);
-      console.log(`[POST /runs] User ID: ${userId}`);
-      console.log(`[POST /runs] Mode: ${mode || 'general'}`);
+    // ====================
+    // ROUTE BASED ON MODE
+    // ====================
+    
+    switch (mode) {
+      case 'research': {
+        console.log(`[POST /runs] → RESEARCH handler`);
+        
+        // Create run in o1_research_runs table
+        await dbQuery(
+          `INSERT INTO o1_research_runs (
+            id, user_id, query, depth, status, 
+            uploaded_files, include_charts, target_sources, metadata
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          [
+            runId,
+            userId,
+            goal,
+            depth || 'medium',
+            'planning',
+            JSON.stringify([]),
+            JSON.stringify(selectedCharts || []),
+            JSON.stringify([]),
+            JSON.stringify({
+              started_at: new Date().toISOString(),
+              fileContext: fileContext || null
+            })
+          ]
+        );
+        
+        // Start background processing
+        setImmediate(() => {
+          processResearch(runId, goal, [], depth || 'medium').catch((error) => {
+            console.error('[Research Router] Error:', error);
+            dbQuery(
+              `UPDATE o1_research_runs 
+               SET status = 'failed', 
+                   metadata = jsonb_set(metadata, '{error}', to_jsonb($2::text))
+               WHERE id = $1`,
+              [runId, error.message]
+            ).catch(err => console.error('[Research Router] DB update failed:', err));
+          });
+        });
+        
+        return res.json({
+          run_id: runId,
+          runId: runId,
+          status: 'planning'
+        });
+      }
       
-      // Call executeFlowAsync in detached context
-      executeFlowAsync(runId, userId, mode || 'general').catch((error) => {
-        console.error(`[POST /runs] ❌ executeFlowAsync failed:`, error.message);
-        console.error(`[POST /runs] ❌ executeFlowAsync stack:`, error.stack);
-      });
-    });
+      case 'reports': {
+        console.log(`[POST /runs] → REPORTS handler`);
+        
+        await dbQuery(
+          `INSERT INTO o1_research_runs (id, user_id, query, depth, status, metadata, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
+          [
+            runId,
+            userId,
+            goal,
+            reportLength || 'medium',
+            'running',
+            JSON.stringify({
+              reportLength: reportLength || 'medium',
+              reportFocus: reportFocus || 'balanced',
+              selectedCharts: selectedCharts || [],
+              fileContext: fileContext || null
+            })
+          ]
+        );
+        
+        setImmediate(() => {
+          generateReportAsync(
+            runId,
+            userId,
+            orgId,
+            goal,
+            reportLength || 'medium',
+            reportFocus,
+            selectedCharts,
+            []
+          ).catch((error) => {
+            console.error('[Reports Router] Error:', error);
+            dbQuery(
+              `UPDATE o1_research_runs 
+               SET status = 'failed', 
+                   metadata = jsonb_set(metadata, '{error}', to_jsonb($2::text))
+               WHERE id = $1`,
+              [runId, error.message]
+            ).catch(err => console.error('[Reports Router] DB update failed:', err));
+          });
+        });
+        
+        return res.json({
+          run_id: runId,
+          runId: runId,
+          status: 'running'
+        });
+      }
+      
+      case 'templates': {
+        console.log(`[POST /runs] → TEMPLATES handler`);
+        
+        const finalTemplateType = templateType || 'business_brief';
+        
+        await dbQuery(
+          `INSERT INTO o1_research_runs (id, user_id, query, depth, status, metadata, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
+          [
+            runId,
+            userId,
+            goal,
+            depth || 'medium',
+            'running',
+            JSON.stringify({
+              templateType: finalTemplateType,
+              depth: depth || 'medium',
+              fileContext: fileContext || null
+            })
+          ]
+        );
+        
+        setImmediate(() => {
+          generateTemplateAsync(
+            runId,
+            userId,
+            orgId,
+            goal,
+            finalTemplateType,
+            depth || 'medium',
+            []
+          ).catch((error) => {
+            console.error('[Templates Router] Error:', error);
+            dbQuery(
+              `UPDATE o1_research_runs 
+               SET status = 'failed', 
+                   metadata = jsonb_set(metadata, '{error}', to_jsonb($2::text))
+               WHERE id = $1`,
+              [runId, error.message]
+            ).catch(err => console.error('[Templates Router] DB update failed:', err));
+          });
+        });
+        
+        return res.json({
+          run_id: runId,
+          runId: runId,
+          status: 'running'
+        });
+      }
+      
+      case 'charts': {
+        console.log(`[POST /runs] → CHARTS handler (existing AgenticFlow)`);
+        
+        const chartRunId = await AgenticFlow.createRun(userId, goal, 'charts', []);
+        
+        await dbQuery(
+          `INSERT INTO agentic_events (ts, run_id, step_id, event_type, payload)
+           VALUES (NOW(), $1, 'setup', 'context', $2)`,
+          [chartRunId, JSON.stringify({
+            selectedCharts: selectedCharts || [],
+            fileContext: fileContext || null
+          })]
+        );
+        
+        setImmediate(() => {
+          executeFlowAsync(chartRunId, userId, 'charts').catch((error) => {
+            console.error(`[Charts Router] Error:`, error);
+          });
+        });
+        
+        return res.json({
+          run_id: chartRunId,
+          runId: chartRunId
+        });
+      }
+      
+      default:
+        return res.status(400).json({ 
+          error: 'Mode not supported',
+          detail: `Supported: research, reports, templates, charts`
+        });
+    }
 
   } catch (error: any) {
-    console.error('❌❌❌ Error creating agentic flow run ❌❌❌');
-    console.error('Error message:', error.message);
-    console.error('Error stack:', error.stack);
-    console.error('Request body:', JSON.stringify(req.body, null, 2));
-    res.status(500).json({ 
+    console.error('❌ [POST /runs] Error:', error.message);
+    return res.status(500).json({ 
       error: error.message,
       details: error.stack
     });
+  }
+});
+
+/**
+ * UNIFIED STREAM ENDPOINT
+ * GET /runs/:runId/stream
+ * Routes SSE streams based on runId prefix to the correct implementation
+ */
+router.get('/runs/:runId/stream', requireAuth, async (req, res) => {
+  const { runId } = req.params;
+  const userId = req.auth?.sub as string;
+  
+  console.log(`\n========== [Stream Router] ==========`);
+  console.log(`RunID: ${runId}`);
+  console.log(`User: ${userId}`);
+  console.log(`=====================================\n`);
+  
+  // Set up SSE headers
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  
+  // Helper to send SSE event
+  const sendEvent = (event: string, data: any) => {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+  
+  // Keep-alive interval (2s pings)
+  let pingCount = 0;
+  const keepAliveInterval = setInterval(() => {
+    try {
+      pingCount++;
+      res.write(`event: progress\ndata: {"status":"processing","ping":${pingCount}}\n\n`);
+      if ((res as any).flush) {
+        (res as any).flush();
+      }
+    } catch (err) {
+      console.error('[Stream Router] Keep-alive failed:', err);
+      clearInterval(keepAliveInterval);
+    }
+  }, 2000);
+  
+  try {
+    // Detect mode from runId prefix
+    let table: string;
+    let mode: string;
+    
+    if (runId.startsWith('run_')) {
+      table = 'o1_research_runs';
+      mode = 'research';
+    } else if (runId.startsWith('rpt_')) {
+      table = 'o1_research_runs';
+      mode = 'reports';
+    } else if (runId.startsWith('tpl_')) {
+      table = 'o1_research_runs';
+      mode = 'templates';
+    } else {
+      table = 'agentic_runs';
+      mode = 'charts';
+    }
+    
+    console.log(`[Stream Router] Detected mode: ${mode}, table: ${table}`);
+    
+    // ===================================
+    // UNIFIED STREAMING FOR R/R/T
+    // ===================================
+    if (mode === 'research' || mode === 'reports' || mode === 'templates') {
+      // Get run
+      const runResult = await dbQuery(`SELECT * FROM ${table} WHERE id = $1 AND user_id = $2`, [runId, userId]);
+      if (runResult.rows.length === 0) {
+        sendEvent('error', { message: 'Run not found' });
+        clearInterval(keepAliveInterval);
+        res.end();
+        return;
+      }
+      
+      const run = runResult.rows[0];
+      sendEvent('run.init', { run, mode });
+      
+      // Stream events from o1_research_activities
+      let lastId = 0;
+      const pollInterval = setInterval(async () => {
+        try {
+          const newEvents = await dbQuery(
+            `SELECT * FROM o1_research_activities 
+             WHERE run_id = $1 AND id > $2 
+             ORDER BY id ASC`,
+            [runId, lastId]
+          );
+          
+          for (const event of newEvents.rows) {
+            const eventType = event.activity_type || event.type || 'update';
+            sendEvent(eventType, event.details || {});
+            lastId = event.id;
+          }
+          
+          // Check if complete
+          const statusCheck = await dbQuery(
+            `SELECT status FROM ${table} WHERE id = $1`,
+            [runId]
+          );
+          
+          if (statusCheck.rows.length > 0) {
+            const status = statusCheck.rows[0].status;
+            if (status === 'completed' || status === 'failed') {
+              // Get final content
+              const contentResult = await dbQuery(
+                `SELECT metadata FROM ${table} WHERE id = $1`,
+                [runId]
+              );
+              
+              if (contentResult.rows.length > 0) {
+                const metadata = contentResult.rows[0].metadata;
+                const reportContent = metadata?.report_content || metadata?.template_content || null;
+                
+                sendEvent(`${mode}.complete`, {
+                  status,
+                  report_content: reportContent,
+                  runId
+                });
+              }
+              
+              clearInterval(pollInterval);
+              clearInterval(keepAliveInterval);
+              res.end();
+            }
+          }
+        } catch (err) {
+          console.error('[Stream Router] Polling error:', err);
+          clearInterval(pollInterval);
+          clearInterval(keepAliveInterval);
+          res.end();
+        }
+      }, 1000);
+      
+      // Cleanup on client disconnect
+      req.on('close', () => {
+        console.log(`[Stream Router] Client disconnected`);
+        clearInterval(pollInterval);
+        clearInterval(keepAliveInterval);
+        res.end();
+      });
+      
+    }
+    // ===================================
+    // EXISTING CHARTS STREAMING
+    // ===================================
+    else if (mode === 'charts') {
+      console.log('[Stream Router] Charts mode - delegating to polling');
+      clearInterval(keepAliveInterval);
+      sendEvent('info', { message: 'Charts use polling - connect to GET /runs/:runId instead' });
+      res.end();
+    }
+    
+  } catch (error: any) {
+    console.error('[Stream Router] Error:', error);
+    sendEvent('error', { message: error.message });
+    clearInterval(keepAliveInterval);
+    res.end();
   }
 });
 
