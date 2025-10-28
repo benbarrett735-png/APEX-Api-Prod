@@ -44,7 +44,8 @@ app.use("/outputs", outputsRouter);
 app.use("/research", researchRouter);
 
 // ✅ Polling Bridge - READ ONLY polling of existing results (no changes to logic)
-app.use("/api", pollingBridgeRouter);
+// Portal calls /api/runs/:id which proxies to this
+app.use("/runs", pollingBridgeRouter);
 
 // ✅ Reports routes (tool-based report generation with charts) - UNCHANGED
 app.use("/reports", reportsRouter);

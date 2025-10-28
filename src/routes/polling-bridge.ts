@@ -19,30 +19,27 @@ import { query as dbQuery } from '../db/query.js';
 const router = express.Router();
 
 /**
- * GET /polling/:type/:runId
+ * GET /runs/:runId - Poll for run status and results
  * 
- * Polls existing run results from database
- * Works with: research, reports, templates, agentic-flow (INITIAL RUNS ONLY)
+ * Portal calls this via their /api/runs/:id proxy (which injects auth token)
+ * Auto-detects agent type from runId prefix (run_, rpt_, tpl_, etc.)
  */
-router.get('/polling/:type/:runId', requireAuth, async (req, res) => {
+router.get('/runs/:runId', requireAuth, async (req, res) => {
   try {
-    const { type, runId } = req.params;
+    const { runId } = req.params;
     const userId = req.auth?.sub as string;
+    
+    // Auto-detect type from runId prefix
+    const type = detectTypeFromRunId(runId);
     
     let result;
     
-    switch (type) {
-      case 'research':
-        result = await pollResearch(runId, userId);
-        break;
-      case 'reports':
-      case 'templates':
-      case 'agentic':
-      case 'charts':
-        result = await pollAgentic(runId, userId);
-        break;
-      default:
-        return res.status(400).json({ error: 'Invalid type' });
+    // Route to appropriate handler based on detected type
+    if (type === 'research') {
+      result = await pollResearch(runId, userId);
+    } else {
+      // Reports, templates, charts all use agentic_runs
+      result = await pollAgentic(runId, userId);
     }
     
     res.json(result);
@@ -125,6 +122,24 @@ async function pollAgentic(runId: string, userId: string) {
     started_at: run.started_at,
     finished_at: run.finished_at
   };
+}
+
+/**
+ * Detect agent type from runId prefix
+ * Examples:
+ *   run_123... → research
+ *   rpt_123... → report
+ *   tpl_123... → template  
+ *   chart-123... → chart
+ */
+function detectTypeFromRunId(runId: string): string {
+  if (runId.startsWith('run_')) return 'research';
+  if (runId.startsWith('rpt_')) return 'report';
+  if (runId.startsWith('tpl_')) return 'template';
+  if (runId.startsWith('chart-') || runId.startsWith('flow-')) return 'chart';
+  
+  // Default to research for unknown prefixes
+  return 'research';
 }
 
 export default router;
