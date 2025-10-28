@@ -5,10 +5,9 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc -p tsconfig.json",
+    "build": "pip3 install --user -r requirements.txt 2>/dev/null || echo 'Python deps skipped' && tsc -p tsconfig.json",
     "migrate": "node scripts/run-migrations.js",
-    "install-python": "bash scripts/install-python-deps.sh || true",
-    "start": "npm run install-python && npm run migrate && node dist/index.js"
+    "start": "npm run migrate && node dist/index.js"
   },
   "dependencies": {
     "@aws-sdk/client-secrets-manager": "^3.713.0",
