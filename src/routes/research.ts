@@ -968,9 +968,6 @@ router.get('/stream/:id', async (req, res) => {
     res.setHeader('X-Accel-Buffering', 'no'); // Disable nginx buffering
     res.flushHeaders();
     
-    // Keep-alive interval (declare outside try block for cleanup access)
-    let keepAliveInterval: NodeJS.Timeout | null = null;
-    
     try {
       // Helper to emit SSE events with delay for client to receive
       const emit = async (event: string, data: any) => {
@@ -984,32 +981,9 @@ router.get('/stream/:id', async (req, res) => {
         await new Promise(resolve => setTimeout(resolve, 50));
       };
       
-      // Keep-alive with progress updates (every 2 seconds)
-      let pingCount = 0;
-      console.log('[Research] ✅ KEEP-ALIVE INTERVAL STARTING (every 2s)');
-      keepAliveInterval = setInterval(() => {
-      try {
-        pingCount++;
-        console.log(`[Research] 📡 Keep-alive ping #${pingCount} sent`);
-        // Send progress event (not just ping) so CloudFront passes it through
-        res.write(`event: thinking\ndata: {"thought":"Processing...","thought_type":"progress","ping":${pingCount}}\n\n`);
-        if ((res as any).flush) {
-          (res as any).flush();
-        }
-      } catch (err) {
-        console.error('[Research] ❌ Keep-alive write failed:', err);
-        if (keepAliveInterval) {
-          clearInterval(keepAliveInterval);
-        }
-      }
-      }, 2000);
-      
       // Clean up on connection close
       req.on('close', () => {
         console.log('[Research] Client disconnected, cleaning up...');
-        if (keepAliveInterval) {
-          clearInterval(keepAliveInterval);
-        }
       });
       
       // ========================================================================
@@ -1521,22 +1495,12 @@ This ${run.depth}-depth research provides foundational information on the topic.
     
     console.log('[Research] Stream completed:', runId);
     
-      // Clean up keep-alive interval
-      if (keepAliveInterval) {
-        clearInterval(keepAliveInterval);
-      }
-      
       // Close SSE connection
       res.end();
       
   } catch (error: any) {
       console.error('[Research] Stream error:', error);
       console.error('[Research] Error stack:', error.stack);
-      
-      // Clean up keep-alive interval
-      if (keepAliveInterval) {
-        clearInterval(keepAliveInterval);
-      }
       
       // Emit error event if possible
       try {

@@ -421,22 +421,6 @@ router.get('/stream/:runId', async (req, res) => {
     }
   };
 
-  // Keep-alive with progress updates (every 2 seconds)
-  let pingCount = 0;
-  const keepAliveInterval = setInterval(() => {
-    try {
-      pingCount++;
-      // Send progress event so CloudFront doesn't timeout
-      res.write(`event: report.progress\ndata: {"status":"processing","ping":${pingCount}}\n\n`);
-      if ((res as any).flush) {
-        (res as any).flush();
-      }
-    } catch (err) {
-      console.error('[Reports] Keep-alive write failed:', err);
-      clearInterval(keepAliveInterval);
-    }
-  }, 2000);
-
   try {
     // Get run details (runId is crypto-random, acts as access token)
     const result = await dbQuery(
@@ -446,7 +430,6 @@ router.get('/stream/:runId', async (req, res) => {
 
     if (result.rows.length === 0) {
       emit('error', { message: 'Report run not found' });
-      clearInterval(keepAliveInterval);
       return res.end();
     }
 
@@ -487,7 +470,6 @@ router.get('/stream/:runId', async (req, res) => {
 
         if (statusResult.rows.length === 0) {
           clearInterval(pollInterval);
-          clearInterval(keepAliveInterval);
           emit('error', { message: 'Run not found' });
           return res.end();
         }
@@ -507,7 +489,6 @@ router.get('/stream/:runId', async (req, res) => {
 
         if (currentStatus === 'completed' && reportContent) {
           clearInterval(pollInterval);
-          clearInterval(keepAliveInterval);
           emit('report.completed', {
             run_id: runId,
             report_content: reportContent,
@@ -516,14 +497,12 @@ router.get('/stream/:runId', async (req, res) => {
           return res.end();
         } else if (currentStatus === 'failed') {
           clearInterval(pollInterval);
-          clearInterval(keepAliveInterval);
           emit('error', { message: 'Report generation failed' });
           return res.end();
         }
       } catch (pollError) {
         console.error('[Reports] Polling error:', pollError);
         clearInterval(pollInterval);
-        clearInterval(keepAliveInterval);
         emit('error', { message: 'Polling failed' });
         return res.end();
       }
@@ -533,14 +512,12 @@ router.get('/stream/:runId', async (req, res) => {
     req.on('close', () => {
       console.log(`[Reports] Client disconnected from stream ${runId}`);
       clearInterval(pollInterval);
-      clearInterval(keepAliveInterval);
       res.end();
     });
 
   } catch (error: any) {
     console.error('[Reports] Stream error:', error);
     emit('error', { message: error.message });
-    clearInterval(keepAliveInterval);
     res.end();
   }
 });

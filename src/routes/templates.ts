@@ -170,24 +170,6 @@ router.get('/stream/:runId', async (req, res) => {
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   };
 
-    // Keep-alive with progress updates (every 2 seconds)
-    let pingCount = 0;
-    console.log('[Templates] ✅ KEEP-ALIVE INTERVAL STARTING (every 2s)');
-    const keepAliveInterval = setInterval(() => {
-      try {
-        pingCount++;
-        console.log(`[Templates] 📡 Keep-alive ping #${pingCount} sent`);
-        // Send progress event so CloudFront doesn't timeout
-        res.write(`event: template.progress\ndata: {"status":"processing","ping":${pingCount}}\n\n`);
-      if ((res as any).flush) {
-        (res as any).flush();
-      }
-    } catch (err) {
-      console.error('[Templates] Keep-alive write failed:', err);
-      clearInterval(keepAliveInterval);
-    }
-  }, 2000);
-
   try {
     // Get run details (runId is crypto-random, acts as access token)
     const result = await dbQuery(
@@ -197,7 +179,6 @@ router.get('/stream/:runId', async (req, res) => {
 
     if (result.rows.length === 0) {
       emit('error', { message: 'Template run not found' });
-      clearInterval(keepAliveInterval);
       return res.end();
     }
 
@@ -216,7 +197,6 @@ router.get('/stream/:runId', async (req, res) => {
         run_id: runId,
         report: run.report_content
       });
-      clearInterval(keepAliveInterval);
       return res.end();
     }
 
@@ -230,7 +210,6 @@ router.get('/stream/:runId', async (req, res) => {
 
         if (statusResult.rows.length === 0) {
           clearInterval(pollInterval);
-          clearInterval(keepAliveInterval);
           emit('error', { message: 'Run not found' });
           return res.end();
         }
@@ -240,7 +219,6 @@ router.get('/stream/:runId', async (req, res) => {
 
         if (status === 'completed') {
           clearInterval(pollInterval);
-          clearInterval(keepAliveInterval);
           emit('template.complete', {
             run_id: runId,
             report
@@ -248,7 +226,6 @@ router.get('/stream/:runId', async (req, res) => {
           res.end();
         } else if (status === 'failed') {
           clearInterval(pollInterval);
-          clearInterval(keepAliveInterval);
           emit('error', { message: 'Template generation failed' });
           res.end();
         }
@@ -260,14 +237,12 @@ router.get('/stream/:runId', async (req, res) => {
     // Cleanup on disconnect
     req.on('close', () => {
       clearInterval(pollInterval);
-      clearInterval(keepAliveInterval);
       res.end();
     });
 
   } catch (error: any) {
     console.error('[Templates] Stream error:', error);
     emit('error', { message: error.message });
-    clearInterval(keepAliveInterval);
     res.end();
   }
 });
