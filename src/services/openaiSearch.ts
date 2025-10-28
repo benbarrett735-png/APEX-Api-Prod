@@ -55,7 +55,7 @@ export async function searchWeb(query: string): Promise<SearchResult> {
     console.log('[Web Search] Searching Google via Serper:', query);
     
     const serperController = new AbortController();
-    const serperTimeout = setTimeout(() => serperController.abort(), 10000); // 10s for search
+    const serperTimeout = setTimeout(() => serperController.abort(), 30000); // 30s for search
 
     const serperResponse = await fetch('https://google.serper.dev/search', {
       method: 'POST',
@@ -152,7 +152,7 @@ Format as JSON:
 }`;
 
     const gptController = new AbortController();
-    const gptTimeout = setTimeout(() => gptController.abort(), 20000); // 20s for synthesis
+    const gptTimeout = setTimeout(() => gptController.abort(), 60000); // 60s for synthesis
 
     const gptResponse = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
