@@ -75,7 +75,7 @@ async function ensureUser(userId: string, email?: string, orgId?: string) {
  */
 router.post('/runs', requireAuth, async (req, res) => {
   try {
-    const { goal, mode, reportLength, reportFocus, selectedCharts, fileContext, depth, templateType } = req.body;
+    const { goal, mode, reportLength, reportFocus, selectedCharts, fileContext, depth, templateType, uploaded_files } = req.body;
     
     console.log('[POST /runs] req.auth present?', !!req.auth);
     console.log('[POST /runs] req.auth keys:', req.auth ? Object.keys(req.auth) : 'none');
@@ -140,7 +140,7 @@ router.post('/runs', requireAuth, async (req, res) => {
         
         // Start background processing
         setImmediate(() => {
-          processResearch(runId, goal, [], depth || 'medium').catch((error) => {
+          processResearch(runId, goal, uploaded_files || [], depth || 'medium').catch((error) => {
             console.error('[Research Router] Error:', error);
             dbQuery(
               `UPDATE o1_research_runs 
@@ -189,7 +189,7 @@ router.post('/runs', requireAuth, async (req, res) => {
             reportLength || 'medium',
             reportFocus,
             selectedCharts,
-            []
+            uploaded_files || []
           ).catch((error) => {
             console.error('[Reports Router] Error:', error);
             dbQuery(
@@ -239,7 +239,7 @@ router.post('/runs', requireAuth, async (req, res) => {
             goal,
             finalTemplateType,
             depth || 'medium',
-            []
+            uploaded_files || []
           ).catch((error) => {
             console.error('[Templates Router] Error:', error);
             dbQuery(
