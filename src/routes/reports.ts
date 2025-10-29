@@ -999,6 +999,14 @@ Write a focused, data-driven section. Use bullet points where appropriate. DO NO
       finalReport += `\n`;
     }
 
+    // Log completion activity for polling
+    await logActivity('report.complete', {
+      report: finalReport,
+      sections_count: artifacts.sections.length,
+      charts_count: artifacts.charts.length,
+      findings_count: artifacts.webFindings.length
+    });
+
     // Save completed report
     await dbQuery(
       `UPDATE o1_research_runs
