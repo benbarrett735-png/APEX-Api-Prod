@@ -42,17 +42,19 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     console.log('[requireAuth] JWT verified successfully');
     console.log('[requireAuth] Payload keys:', Object.keys(payload));
 
-    // Extra safety: ensure this is an ACCESS token (not ID token)
-    if ((payload as any).token_use && (payload as any).token_use !== "access") {
-      console.error('[requireAuth] FAILED: Wrong token type:', (payload as any).token_use);
+    // Accept both ACCESS and ID tokens
+    // ID tokens have "sub" (user ID), access tokens have "username"
+    const tokenUse = (payload as any).token_use;
+    if (tokenUse && tokenUse !== "access" && tokenUse !== "id") {
+      console.error('[requireAuth] FAILED: Wrong token type:', tokenUse);
       return res.status(401).json({ error: "unauthorized", detail: "wrong token type" });
     }
 
-    // Cognito uses client_id instead of aud
-    const clientId = (payload as any).client_id;
-    console.log('[requireAuth] Checking client_id. Expected:', OIDC_CLIENT_ID, 'Got:', clientId);
+    // Accept both client_id (access token) and aud (ID token)
+    const clientId = (payload as any).client_id || (payload as any).aud;
+    console.log('[requireAuth] Checking client_id/aud. Expected:', OIDC_CLIENT_ID, 'Got:', clientId);
     if (clientId !== OIDC_CLIENT_ID) {
-      console.error('[requireAuth] FAILED: Client ID mismatch');
+      console.error('[requireAuth] FAILED: Client ID/audience mismatch');
       return res.status(401).json({ error: "unauthorized", detail: "client_id mismatch" });
     }
 

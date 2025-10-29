@@ -272,6 +272,25 @@ export async function generateTemplateAsync(
     const regenerationFeedback = metadata.feedback || null;
     const originalReport = metadata.original_report || null;
 
+    // Helper to log activities for polling
+    const logActivity = async (activityType: string, activityData: any) => {
+      try {
+        await dbQuery(
+          `INSERT INTO o1_research_activities (run_id, activity_type, activity_data, created_at)
+           VALUES ($1, $2, $3, NOW())`,
+          [runId, activityType, JSON.stringify(activityData)]
+        );
+      } catch (err) {
+        console.error('[Templates] Error logging activity:', err);
+      }
+    };
+
+    // Log start
+    await logActivity('thinking', {
+      thought: `Starting ${templateType} generation...`,
+      thought_type: 'planning'
+    });
+
     // Get template structure
     const sections = TEMPLATE_STRUCTURES[templateType];
 
@@ -344,6 +363,12 @@ Generate the complete ${templateType} report with ALL required sections.`;
 
     const response = await callAPIM(messages);
     const finalReport = response.choices?.[0]?.message?.content || 'Failed to generate report';
+
+    // Log completion activity for polling
+    await logActivity('template.complete', {
+      template_type: templateType,
+      report: finalReport
+    });
 
     // Save completed template
     await dbQuery(

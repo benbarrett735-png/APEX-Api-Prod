@@ -73,9 +73,13 @@ async function ensureUser(userId: string, email?: string, orgId?: string) {
 /**
  * Create a new agentic flow run
  */
-router.post('/runs', async (req, res) => {
+router.post('/runs', requireAuth, async (req, res) => {
   try {
     const { goal, mode, reportLength, reportFocus, selectedCharts, fileContext, depth, templateType } = req.body;
+    
+    console.log('[POST /runs] req.auth present?', !!req.auth);
+    console.log('[POST /runs] req.auth keys:', req.auth ? Object.keys(req.auth) : 'none');
+    console.log('[POST /runs] req.auth.sub:', req.auth?.sub);
     
     // Extract user from validated JWT (per Kevin's plan)
     const userId = req.auth?.sub as string;
@@ -83,6 +87,7 @@ router.post('/runs', async (req, res) => {
     const orgId = req.auth?.['custom:org_id'] as string || '00000000-0000-0000-0000-000000000001';
     
     if (!userId) {
+      console.error('[POST /runs] FAILED: No userId in req.auth');
       return res.status(401).json({ error: 'User ID not found in token' });
     }
     
@@ -119,8 +124,8 @@ router.post('/runs', async (req, res) => {
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
           [
             runId,
-            userId,
-            goal,
+      userId, 
+      goal, 
             depth || 'medium',
             'planning',
             JSON.stringify([]),
@@ -148,7 +153,7 @@ router.post('/runs', async (req, res) => {
         });
         
         return res.json({
-          run_id: runId,
+      run_id: runId,
           runId: runId,
           status: 'planning'
         });
@@ -194,9 +199,9 @@ router.post('/runs', async (req, res) => {
                WHERE id = $1`,
               [runId, error.message]
             ).catch(err => console.error('[Reports Router] DB update failed:', err));
-          });
-        });
-        
+      });
+    });
+
         return res.json({
           run_id: runId,
           runId: runId,
@@ -258,8 +263,8 @@ router.post('/runs', async (req, res) => {
         console.log(`[POST /runs] → CHARTS handler (existing AgenticFlow)`);
         
         const chartRunId = await AgenticFlow.createRun(userId, goal, 'charts', []);
-        
-        await dbQuery(
+    
+    await dbQuery(
           `INSERT INTO agentic_events (ts, run_id, step_id, event_type, payload)
            VALUES (NOW(), $1, 'setup', 'context', $2)`,
           [chartRunId, JSON.stringify({
@@ -324,7 +329,7 @@ router.get('/runs/:runId/stream', async (req, res) => {
   const sendEvent = (event: string, data: any) => {
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   };
-  
+
   // Keep-alive interval (2s pings)
   let pingCount = 0;
   const keepAliveInterval = setInterval(() => {
@@ -370,28 +375,28 @@ router.get('/runs/:runId/stream', async (req, res) => {
         ? await dbQuery(`SELECT * FROM ${table} WHERE id = $1 AND user_id = $2`, [runId, userId])
         : await dbQuery(`SELECT * FROM ${table} WHERE id = $1`, [runId]);
         
-      if (runResult.rows.length === 0) {
-        sendEvent('error', { message: 'Run not found' });
+    if (runResult.rows.length === 0) {
+      sendEvent('error', { message: 'Run not found' });
         clearInterval(keepAliveInterval);
-        res.end();
-        return;
-      }
-      
-      const run = runResult.rows[0];
+      res.end();
+      return;
+    }
+
+    const run = runResult.rows[0];
       sendEvent('run.init', { run, mode });
       
       // Stream events from o1_research_activities
       let lastId = 0;
-      const pollInterval = setInterval(async () => {
-        try {
-          const newEvents = await dbQuery(
+    const pollInterval = setInterval(async () => {
+      try {
+        const newEvents = await dbQuery(
             `SELECT * FROM o1_research_activities 
              WHERE run_id = $1 AND id > $2 
              ORDER BY id ASC`,
             [runId, lastId]
-          );
-          
-          for (const event of newEvents.rows) {
+        );
+
+        for (const event of newEvents.rows) {
             const eventType = event.activity_type || event.type || 'update';
             sendEvent(eventType, event.details || {});
             lastId = event.id;
@@ -400,17 +405,17 @@ router.get('/runs/:runId/stream', async (req, res) => {
           // Check if complete
           const statusCheck = await dbQuery(
             `SELECT status FROM ${table} WHERE id = $1`,
-            [runId]
-          );
-          
+          [runId]
+        );
+        
           if (statusCheck.rows.length > 0) {
             const status = statusCheck.rows[0].status;
             if (status === 'completed' || status === 'failed') {
               // Get final content
               const contentResult = await dbQuery(
                 `SELECT metadata FROM ${table} WHERE id = $1`,
-                [runId]
-              );
+              [runId]
+            );
               
               if (contentResult.rows.length > 0) {
                 const metadata = contentResult.rows[0].metadata;
@@ -495,11 +500,13 @@ router.get('/runs/:runId', requireAuth, async (req, res) => {
     if (hasCursor) {
       // Detect type from runId prefix
       const isResearch = runId.startsWith('run_');
+      const isReport = runId.startsWith('rpt_');
+      const isTemplate = runId.startsWith('tpl_');
       
-      if (isResearch) {
-      // Research mode - use o1_research tables
+      if (isResearch || isReport || isTemplate) {
+      // Research/Reports/Templates mode - all use o1_research tables
       const runResult = await dbQuery(
-        `SELECT status, query as goal, started_at, finished_at 
+        `SELECT status, query as goal, created_at, updated_at 
          FROM o1_research_runs 
          WHERE id = $1 AND user_id = $2`,
         [runId, userId]
@@ -583,7 +590,7 @@ router.get('/runs/:runId', requireAuth, async (req, res) => {
         goal: run.goal
       });
       
-    } else {
+                } else {
       // Agent mode (reports, templates, charts) - use agentic tables
       const runResult = await dbQuery(
         `SELECT status, goal, started_at, finished_at 
