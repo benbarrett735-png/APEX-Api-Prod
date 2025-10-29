@@ -108,9 +108,16 @@ async function createReportPlan(
     }
   ];
 
-  // Extract document content if available
+  // Extract document content if available (LIMIT to prevent APIM payload errors)
   const documentContent = uploadedFiles.length > 0
-    ? uploadedFiles.map(f => `FILE: ${f.fileName}\nCONTENT:\n${f.content || '(no content)'}`).join('\n\n---\n\n')
+    ? uploadedFiles.map(f => {
+        const content = f.content || '(no content)';
+        // Limit each file to 5000 chars to prevent APIM 500 errors
+        const limitedContent = content.length > 5000 
+          ? content.substring(0, 5000) + '\n\n[...document truncated for API limits...]'
+          : content;
+        return `FILE: ${f.fileName}\nCONTENT:\n${limitedContent}`;
+      }).join('\n\n---\n\n')
     : null;
 
   // ✅ BUILD REGENERATION CONTEXT (if applicable)
@@ -685,9 +692,15 @@ export async function generateReportAsync(
             });
 
             const focus = toolCall.parameters.focus || 'extract key insights';
-            const documentContent = uploadedFiles.map(f => 
-              `FILE: ${f.fileName}\n${f.content}`
-            ).join('\n\n---\n\n');
+            // Limit document content to prevent APIM 500 errors
+            const documentContent = uploadedFiles.map(f => {
+              const content = f.content || '';
+              // Limit each file to 5000 chars
+              const limitedContent = content.length > 5000
+                ? content.substring(0, 5000) + '\n\n[...document truncated for API limits...]'
+                : content;
+              return `FILE: ${f.fileName}\n${limitedContent}`;
+            }).join('\n\n---\n\n');
 
             const analysisPrompt = `Analyze these documents with focus on: ${focus}
 
