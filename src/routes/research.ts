@@ -776,8 +776,38 @@ export async function processResearch(
   files: string[] | UploadedFile[],
   depth: string
 ): Promise<void> {
+  try {
   console.log(`[Research] Background processing started for ${runId}`);
   console.log(`[Research] Query: "${query}", Depth: ${depth}, Files: ${files.length}`);
+    
+    // Helper to log activities for polling
+    const logActivity = async (activityType: string, activityData: any) => {
+      try {
+        await dbQuery(
+          `INSERT INTO o1_research_activities (run_id, activity_type, activity_data, created_at)
+           VALUES ($1, $2, $3, NOW())`,
+          [runId, activityType, JSON.stringify(activityData)]
+        );
+      } catch (err) {
+        console.error('[Research] Error logging activity:', err);
+      }
+    };
+    
+    // Check if this is a regeneration
+    const runResult = await dbQuery(
+      `SELECT metadata, uploaded_files, include_charts FROM o1_research_runs WHERE id = $1`,
+      [runId]
+    );
+    const metadata = runResult.rows[0]?.metadata || {};
+    const isRegeneration = !!metadata.regenerated_from;
+    const regenerationFeedback = metadata.feedback || null;
+    const originalReport = metadata.original_report || null;
+    
+    // Log start
+    await logActivity('thinking', {
+      thought: isRegeneration ? `🔄 Regenerating research with feedback: "${regenerationFeedback?.substring(0, 100)}"` : `Starting research on: ${query}`,
+      thought_type: 'planning'
+    });
   
   // Update status to processing
   await dbQuery(
@@ -787,9 +817,288 @@ export async function processResearch(
     [runId]
   );
   
-  // Note: SSE stream handles the actual research
-  // This background task just ensures DB status is updated
-  // Real work happens in the SSE stream to emit events in real-time
+    const startTime = Date.now();
+    const allFindings: string[] = [];
+    const sources: string[] = [];
+    const chartUrls: Record<string, string> = {};
+    
+    // Parse uploaded files
+    let uploadedFiles: UploadedFile[] = [];
+    const rawFiles = runResult.rows[0]?.uploaded_files;
+    if (Array.isArray(rawFiles)) {
+      uploadedFiles = rawFiles;
+    } else if (typeof rawFiles === 'string') {
+      try {
+        uploadedFiles = JSON.parse(rawFiles);
+      } catch (e) {
+        uploadedFiles = [];
+      }
+    }
+    
+    // Parse chart requests
+    let chartRequests: Array<{type: string; goal?: string}> = [];
+    const rawCharts = runResult.rows[0]?.include_charts;
+    if (Array.isArray(rawCharts)) {
+      chartRequests = rawCharts.map((item: any) => 
+        typeof item === 'string' ? { type: item } : { type: item.type, goal: item.goal }
+      );
+    } else if (typeof rawCharts === 'string') {
+      try {
+        const parsed = JSON.parse(rawCharts);
+        chartRequests = Array.isArray(parsed) ? parsed.map((item: any) => 
+          typeof item === 'string' ? { type: item } : { type: item.type, goal: item.goal }
+        ) : [];
+      } catch (e) {
+        chartRequests = [];
+      }
+    }
+    
+    console.log('[Research] Files:', uploadedFiles.length, 'Charts:', chartRequests.length);
+    
+    // Extract document context if files present
+    let documentContext: string | undefined;
+    if (uploadedFiles.length > 0) {
+      const filesWithContent = uploadedFiles.filter((f: any) => f.content && f.content.trim().length > 0) as UploadedFile[];
+      
+      if (filesWithContent.length > 0) {
+        documentContext = filesWithContent
+          .map((f: UploadedFile) => `Document: ${f.fileName}\n\n${f.content}`)
+          .join('\n\n---\n\n');
+        documentContext = documentContext.substring(0, 8000);
+        
+        await logActivity('thinking', {
+          thought: `Analyzing ${filesWithContent.length} uploaded document${filesWithContent.length > 1 ? 's' : ''}...`,
+          thought_type: 'analyzing'
+        });
+      }
+    }
+    
+    // Create research plan
+    await logActivity('thinking', {
+      thought: 'Planning research approach...',
+      thought_type: 'planning'
+    });
+    
+    const plan = await createToolBasedPlan(
+      query,
+      uploadedFiles,
+      depth,
+      chartRequests,
+      isRegeneration ? {
+        isRegeneration: true,
+        feedback: regenerationFeedback,
+        originalReport: originalReport
+      } : undefined
+    );
+    
+    console.log('[Research] Plan created:', plan.toolCalls.length, 'tools');
+    
+    await logActivity('thinking', {
+      thought: `Research plan: ${plan.toolCalls.length} steps`,
+      thought_type: 'planning'
+    });
+    
+    // Execute tool calls
+    for (let i = 0; i < plan.toolCalls.length; i++) {
+      const toolCall = plan.toolCalls[i];
+      console.log(`[Research] Tool ${i + 1}/${plan.toolCalls.length}: ${toolCall.tool}`);
+      
+      await logActivity('thinking', {
+        thought: `Step ${i + 1}/${plan.toolCalls.length}: ${toolCall.tool}`,
+        thought_type: 'executing'
+      });
+      
+      try {
+        switch (toolCall.tool) {
+          case 'analyze_documents': {
+            const filesWithContent = uploadedFiles.filter((f: any) => f.content) as UploadedFile[];
+            if (filesWithContent.length > 0) {
+              console.log('[Research] Analyzing documents...');
+              
+              const docMessages = [
+                {
+                  role: 'system',
+                  content: `Extract key insights from the uploaded documents. Focus on: ${toolCall.parameters.focus || 'main points and actionable information'}.`
+                },
+                {
+                  role: 'user',
+                  content: `Documents:\n\n${filesWithContent.map(f => `FILE: ${f.fileName}\n\n${f.content}`).join('\n\n---\n\n')}`
+                }
+              ];
+              
+              const docResponse = await callAPIM(docMessages);
+              const insights = docResponse.choices[0].message.content;
+              
+              allFindings.push(`### Document Analysis\n\n${insights}`);
+              sources.push(...filesWithContent.map(f => `Uploaded: ${f.fileName}`));
+              
+              console.log('[Research] Document analysis complete');
+            }
+            break;
+          }
+          
+          case 'search_web': {
+            const searchQuery = toolCall.parameters.searchQuery;
+            console.log('[Research] Searching web:', searchQuery);
+            
+            await logActivity('thinking', {
+              thought: `Searching: "${searchQuery}"`,
+              thought_type: 'searching'
+            });
+            
+            try {
+              const searchResult = await searchWeb(searchQuery);
+              
+              if (searchResult.findings && searchResult.findings.length > 0) {
+                allFindings.push(...searchResult.findings);
+                sources.push(...(searchResult.sources || []));
+                
+                console.log('[Research] Web search found:', searchResult.findings.length, 'findings');
+              }
+            } catch (searchError: any) {
+              console.error('[Research] Web search error:', searchError);
+              await logActivity('thinking', {
+                thought: `Search issue: ${searchError.message}`,
+                thought_type: 'pivot'
+              });
+            }
+            break;
+          }
+          
+          case 'generate_chart': {
+            // Chart generation logic (simplified for now)
+            console.log('[Research] Chart generation requested:', toolCall.parameters.chartType);
+            await logActivity('thinking', {
+              thought: `Generating ${toolCall.parameters.chartType} chart...`,
+              thought_type: 'executing'
+            });
+            break;
+          }
+          
+          case 'compile_report': {
+            // Report compilation handled after loop
+            await logActivity('thinking', {
+              thought: 'Preparing final report...',
+              thought_type: 'synthesizing'
+            });
+            break;
+          }
+          
+          default: {
+            console.log('[Research] Unknown tool:', toolCall.tool);
+          }
+        }
+      } catch (toolError: any) {
+        console.error(`[Research] Tool error (${toolCall.tool}):`, toolError);
+        await logActivity('thinking', {
+          thought: `Issue with ${toolCall.tool}: ${toolError.message}. Continuing...`,
+          thought_type: 'pivot'
+        });
+      }
+    }
+    
+    // Generate final report
+    await logActivity('thinking', {
+      thought: 'Synthesizing findings into report...',
+      thought_type: 'synthesis'
+    });
+    
+    let finalReport: string;
+    
+    if (allFindings.length === 0) {
+      finalReport = `# Research Report
+
+## Query
+"${query}"
+
+## Status
+Research completed but no specific findings were returned. This may be due to:
+- API configuration issues
+- Query requires more specific parameters
+- External search limitations
+
+## Recommendation
+Please try rephrasing your query or check API configuration.`;
+    } else {
+      try {
+        finalReport = await generateSmartReport({
+          query: query,
+          depth: depth as any,
+          fileFindings: uploadedFiles.length > 0 ? allFindings.filter(f => f.includes('Document Analysis')) : undefined,
+          webFindings: allFindings.filter(f => !f.includes('Document Analysis')),
+          sources
+        });
+      } catch (error: any) {
+        console.error('[Research] Report generation error:', error);
+        
+        // Fallback report
+        finalReport = `# Research Report
+
+## Executive Summary
+
+Research on "${query}" with ${allFindings.length} findings from ${sources.length} sources.
+
+## Key Findings
+
+${allFindings.map((f, i) => `${i + 1}. ${f}`).join('\n\n')}
+
+## Analysis
+
+The research covered ${allFindings.length} key findings from ${sources.length} sources.
+
+## Sources
+
+${sources.map((s, i) => `${i + 1}. ${s}`).join('\n')}
+
+## Conclusion
+
+This ${depth}-depth research provides foundational information on the topic. Further analysis may be needed for specific aspects.
+
+---
+
+*Research completed at ${new Date().toISOString()}*`;
+      }
+    }
+    
+    const duration = Math.round((Date.now() - startTime) / 1000);
+    console.log(`[Research] Completed in ${duration}s`);
+    
+    // Log completion activity for polling
+    await logActivity('completed', {
+      final_content: finalReport,
+      duration_seconds: duration,
+      findings_count: allFindings.length,
+      sources_count: sources.length
+    });
+    
+    // Save completed research
+    await dbQuery(
+      `UPDATE o1_research_runs
+       SET status = 'completed',
+           report_content = $2,
+           metadata = jsonb_set(
+             jsonb_set(metadata, '{completed_at}', to_jsonb($3::text)),
+             '{duration_seconds}', to_jsonb($4::int)
+           ),
+           updated_at = NOW()
+       WHERE id = $1`,
+      [runId, finalReport, new Date().toISOString(), duration]
+    );
+    
+    console.log('[Research] Saved to database:', runId);
+    
+  } catch (error: any) {
+    console.error('[Research] Processing error:', error);
+    
+    await dbQuery(
+      `UPDATE o1_research_runs
+       SET status = 'failed',
+           metadata = jsonb_set(metadata, '{error}', to_jsonb($2::text)),
+           updated_at = NOW()
+       WHERE id = $1`,
+      [runId, error.message]
+    );
+  }
 }
 
 // ============================================================================
@@ -1063,7 +1372,7 @@ router.get('/stream/:id', async (req, res) => {
     
     // ✅ Show regeneration message if applicable
     if (isRegeneration) {
-      await emit('thinking', {
+    await emit('thinking', {
         thought: `🔄 Regenerating research with your feedback${regenerationFeedback ? `: "${regenerationFeedback.substring(0, 100)}"` : ''}`,
         thought_type: 'regeneration'
       });
@@ -1494,7 +1803,7 @@ This ${run.depth}-depth research provides foundational information on the topic.
     );
     
     console.log('[Research] Stream completed:', runId);
-    
+      
       // Close SSE connection
       res.end();
       
