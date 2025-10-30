@@ -81,13 +81,18 @@ export class ChartService {
       }
       
       // Format via APIM - handles ALL chart types the same way
-      formattedPayload = await this.formatDataViaAPIM(request);
+      try {
+        formattedPayload = await this.formatDataViaAPIM(request);
+      } catch (apimError: any) {
+        console.warn('[ChartService] ⚠️  APIM formatting failed, trying direct format fallback:', apimError.message);
+        formattedPayload = this.tryDirectFormat(request);
+      }
       
       if (!formattedPayload) {
-        return { success: false, error: 'APIM failed to format chart data' };
+        return { success: false, error: 'Failed to format chart data (APIM and fallback both failed)' };
       }
 
-      console.log('[ChartService] ✅ APIM returned formatted payload');
+      console.log('[ChartService] ✅ Chart data formatted successfully');
 
       // Execute D3 chart builder (Node.js - no Python needed!)
       const chartPath = await this.executeD3Builder(request.chartType, formattedPayload);
@@ -111,6 +116,76 @@ export class ChartService {
         success: false,
         error: error.message
       };
+    }
+  }
+
+  /**
+   * Try to format data directly when APIM fails (fallback)
+   */
+  private tryDirectFormat(request: ChartRequest): any {
+    console.log('[ChartService] [tryDirectFormat] Attempting direct format fallback');
+    console.log('[ChartService] [tryDirectFormat] Chart type:', request.chartType);
+    console.log('[ChartService] [tryDirectFormat] Data keys:', Object.keys(request.data || {}));
+
+    const data = request.data || {};
+    const chartType = request.chartType.toLowerCase();
+
+    // Default options
+    const options = {
+      width: 1200,
+      height: 700,
+      dpi: 100,
+      legend: true,
+      grid: true
+    };
+
+    // Try to format based on common data patterns
+    try {
+      // Pattern 1: Already has x and series
+      if (data.x && data.series) {
+        console.log('[ChartService] [tryDirectFormat] ✅ Data already has x and series');
+        return {
+          title: request.title || request.goal,
+          x: data.x,
+          series: data.series,
+          options
+        };
+      }
+
+      // Pattern 2: Has categories and values (common for pie, bar)
+      if (data.categories && data.values) {
+        console.log('[ChartService] [tryDirectFormat] ✅ Converting categories/values to x/series');
+        return {
+          title: request.title || request.goal,
+          x: data.categories,
+          series: [{
+            name: 'Data',
+            values: data.values
+          }],
+          options
+        };
+      }
+
+      // Pattern 3: Has labels and data
+      if (data.labels && data.data) {
+        console.log('[ChartService] [tryDirectFormat] ✅ Converting labels/data to x/series');
+        return {
+          title: request.title || request.goal,
+          x: data.labels,
+          series: [{
+            name: 'Data',
+            values: data.data
+          }],
+          options
+        };
+      }
+
+      console.warn('[ChartService] [tryDirectFormat] ❌ Could not determine data format');
+      return null;
+
+    } catch (error: any) {
+      console.error('[ChartService] [tryDirectFormat] Error:', error);
+      return null;
     }
   }
 
