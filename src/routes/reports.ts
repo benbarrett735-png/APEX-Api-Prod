@@ -161,14 +161,16 @@ YOUR JOB:
 4. CREATE a step-by-step execution plan using available tools
 
 CRITICAL RULES FOR REPORTS:
+- Reports are FORMAL BUSINESS ANALYSIS (paragraphs, not bullet points!)
 - Reports should be FOCUSED and DATA-DRIVEN, NOT encyclopedic
 - If user uploaded documents, analyze them FIRST and prefer document data
-- ONLY use search_web if critical data is missing (limit to 1 search ONLY!)
+- Web searches: ${reportLength === 'short' ? '1-2 maximum' : reportLength === 'long' ? '3-4 maximum' : '2-3 maximum'} (ONLY if critical data missing!)
 - Chart types requested by user: ${selectedCharts && selectedCharts.length > 0 ? selectedCharts.join(', ') : 'none specified - suggest 1-2 valuable ones'}
 - Report length: ${reportLength} (short=2-3 sections MAX, medium=3-4 sections MAX, long=4-5 sections MAX)
 ${reportFocus ? `- Report focus: ${reportFocus}` : ''}
 - Include charts that add REAL VALUE (not decorative) - limit to 1-2 max
 - Structure should be logical: Executive Summary → Analysis → Recommendations (3 sections is ideal)
+- Charts should be placed INLINE with relevant sections (not dumped at end)
 
 AVAILABLE TOOLS:
 ${tools.map(t => `- ${t.name}: ${t.description}`).join('\n')}
@@ -182,10 +184,10 @@ PLANNING STRATEGY (KEEP IT EFFICIENT!):
 
 EFFICIENCY RULES (STRICT ENFORCEMENT):
 - Prefer document data over web search
-- search_web: 0-1 calls ONLY (skip if documents have enough data)
+- search_web: ${reportLength === 'short' ? '1-2 calls' : reportLength === 'long' ? '3-4 calls' : '2-3 calls'} MAXIMUM (based on report length)
 - generate_chart: 1-2 calls MAXIMUM (not 3+)
 - draft_section: 3-4 calls MAXIMUM (NOT 5, 6, 7+)
-- Keep total tool calls under 8 steps
+- Keep total tool calls under ${reportLength === 'short' ? '7' : reportLength === 'long' ? '12' : '10'} steps
 
 OUTPUT FORMAT (STRICT JSON):
 {
@@ -916,7 +918,7 @@ Be specific and cite the source documents.`;
             ? allData.substring(0, 2000) + '\n\n[Additional data truncated for conciseness]'
             : allData;
 
-          const sectionPrompt = `Write the "${sectionName}" section for a ${reportLength} report.
+          const sectionPrompt = `Write the "${sectionName}" section for a ${reportLength} formal business report.
 
 REPORT GOAL: ${goal}
 ${reportFocus ? `FOCUS: ${reportFocus}\n` : ''}
@@ -928,10 +930,16 @@ LENGTH REQUIREMENT: Maximum ${guideline.maxWords} words. ${guideline.style}
 AVAILABLE DATA:
 ${limitedData}
 
-Write a focused, data-driven section. Use bullet points where appropriate. DO NOT exceed ${guideline.maxWords} words.`;
+CRITICAL FORMATTING RULES:
+- Write in FLOWING PARAGRAPHS, NEVER use bullet points
+- This is a FORMAL BUSINESS REPORT, not casual research notes
+- Integrate data and insights naturally into prose
+- Use analytical, professional tone
+- Weave charts and data into the narrative (if relevant to this section)
+- DO NOT exceed ${guideline.maxWords} words`;
 
           const sectionResponse: any = await callAPIM([
-            { role: 'system', content: `You are an expert report writer. Create clear, CONCISE sections with data-driven insights. CRITICAL: Stay under the word limit. Use bullet points. Be direct.` },
+            { role: 'system', content: `You are an expert business analyst writing formal reports. Write in PARAGRAPHS with professional, analytical prose. NEVER use bullet points. Integrate data smoothly into flowing text. Stay under word limit.` },
             { role: 'user', content: sectionPrompt }
           ]);
 
@@ -972,12 +980,31 @@ Write a focused, data-driven section. Use bullet points where appropriate. DO NO
     console.log('[Reports] PHASE 3: Compiling final report...');
     await updateProgress(stepNumber, totalSteps, 'Compiling final report...');
 
-    let finalReport = `# ${goal}\n\n`;
+    // Generate title from content using APIM
+    let reportTitle = goal; // Default to goal
+    try {
+      const titlePrompt = `Generate a professional, formal title for this business report (maximum 12 words). 
+      
+Report subject: ${plan.understanding.coreSubject}
+Report type: ${plan.understanding.reportType}
+Goal: ${goal}
 
-    // Add metadata
-    finalReport += `**Report Type:** ${plan.understanding.reportType}\n`;
-    finalReport += `**Generated:** ${new Date().toLocaleDateString()}\n\n`;
-    finalReport += `---\n\n`;
+Return ONLY the title, nothing else.`;
+      
+      const titleResponse: any = await callAPIM([
+        { role: 'system', content: 'You are a professional business analyst. Generate concise, formal report titles.' },
+        { role: 'user', content: titlePrompt }
+      ]);
+      
+      const generatedTitle = titleResponse.choices[0].message.content.trim().replace(/^["']|["']$/g, '');
+      if (generatedTitle && generatedTitle.length > 0 && generatedTitle.length < 150) {
+        reportTitle = generatedTitle;
+      }
+    } catch (titleError) {
+      console.log('[Reports] ⚠️  Title generation failed, using goal as title');
+    }
+
+    let finalReport = `# ${reportTitle}\n\n`;
 
     // Add sections
     for (const section of artifacts.sections) {
@@ -985,31 +1012,17 @@ Write a focused, data-driven section. Use bullet points where appropriate. DO NO
       finalReport += `${section.content}\n\n`;
     }
 
-    // Add charts
+    // Add charts inline (place at end for now, TODO: integrate with sections)
     if (artifacts.charts.length > 0) {
       finalReport += `## Data Visualizations\n\n`;
       for (const chart of artifacts.charts) {
         finalReport += `### ${chart.purpose || chart.type}\n\n`;
         if (chart.failed) {
-          finalReport += `> ⚠️ **Chart Generation Failed**\n`;
-          finalReport += `> Type: ${chart.type}\n`;
-          if (chart.error) {
-            finalReport += `> Error: ${chart.error}\n`;
-          }
-          finalReport += `\n`;
+          finalReport += `*Chart generation failed (${chart.type})*\n\n`;
         } else {
           finalReport += `![${chart.type} chart](${chart.url})\n\n`;
         }
       }
-    }
-
-    // Add sources/references
-    if (artifacts.webFindings.length > 0) {
-      finalReport += `## Sources\n\n`;
-      artifacts.webFindings.forEach((finding: any, idx: number) => {
-        finalReport += `${idx + 1}. Search: "${finding.query}"\n`;
-      });
-      finalReport += `\n`;
     }
 
     // Log completion activity for polling

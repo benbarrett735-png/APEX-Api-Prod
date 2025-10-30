@@ -350,6 +350,8 @@ export class D3ChartBuilder {
     const arc = d3.arc().innerRadius(0).outerRadius(radius);
 
     const values = payload.series[0].values;
+    const total = values.reduce((sum: number, v: number) => sum + v, 0);
+    
     const arcs = g.selectAll('.arc')
       .data(pie(values))
       .enter()
@@ -362,14 +364,18 @@ export class D3ChartBuilder {
       .attr('stroke', 'white')
       .attr('stroke-width', 2);
 
-    // Labels
+    // Labels with both name AND actual value + percentage
     arcs.append('text')
       .attr('transform', (d: any) => `translate(${arc.centroid(d)})`)
       .attr('text-anchor', 'middle')
       .attr('fill', 'white')
       .attr('font-weight', 'bold')
       .attr('font-size', '14px')
-      .text((d: any, i: number) => payload.x[i]);
+      .text((d: any, i: number) => {
+        const value = values[i];
+        const percentage = ((value / total) * 100).toFixed(1);
+        return `${payload.x[i]}\n${value} (${percentage}%)`;
+      });
   }
 
   /**
@@ -472,9 +478,10 @@ export class D3ChartBuilder {
   private buildRadarChart(svg: any, payload: any, width: number, height: number): void {
     this.addTitle(svg, payload.title, width);
 
-    const radius = Math.min(width, height - 100) / 2 - 80;
+    const radius = Math.min(width, height - 140) / 2 - 40;
+    const centerY = 70 + (height - 140) / 2; // Title takes ~60px + 10px margin
     const g = svg.append('g')
-      .attr('transform', `translate(${width / 2},${(height + 40) / 2}}`);
+      .attr('transform', `translate(${width / 2},${centerY})`);
 
     // Support both axes and x for labels
     const axes = payload.axes || payload.x || [];
