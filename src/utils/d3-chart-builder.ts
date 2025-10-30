@@ -474,9 +474,10 @@ export class D3ChartBuilder {
 
     const radius = Math.min(width, height - 100) / 2 - 80;
     const g = svg.append('g')
-      .attr('transform', `translate(${width / 2},${(height + 40) / 2})`);
+      .attr('transform', `translate(${width / 2},${(height + 40) / 2}}`);
 
-    const axes = payload.axes;
+    // Support both axes and x for labels
+    const axes = payload.axes || payload.x || [];
     const angleSlice = (Math.PI * 2) / axes.length;
     const colors = this.getColors(payload);
 
@@ -706,17 +707,27 @@ export class D3ChartBuilder {
 
     const colors = this.getColors(payload);
 
-    // Convert items to hierarchy
-    const hierarchyData: any = {
-      name: 'root',
-      children: payload.items.map((item: any) => ({
-        name: item.label,
-        value: item.value
-      }))
-    };
+    // Support both direct hierarchy data and items array
+    let hierarchyData: any;
+    if (payload.data && (payload.data.children || payload.data.value)) {
+      // Already hierarchical
+      hierarchyData = payload.data;
+    } else if (payload.items) {
+      // Convert items array to hierarchy
+      hierarchyData = {
+        name: 'root',
+        children: payload.items.map((item: any) => ({
+          name: item.label || item.name,
+          value: item.value
+        }))
+      };
+    } else {
+      // Fallback: empty hierarchy
+      hierarchyData = { name: 'root', children: [] };
+    }
 
     const root = d3.hierarchy(hierarchyData)
-      .sum((d: any) => d.value);
+      .sum((d: any) => d.value || 0);
 
     d3.treemap<any>()
       .size([chartWidth, chartHeight])
@@ -759,8 +770,10 @@ export class D3ChartBuilder {
 
     const colors = this.getColors(payload);
 
-    const root = d3.hierarchy(payload.root)
-      .sum((d: any) => d.value);
+    // Support both root and data properties
+    const hierarchyData = payload.root || payload.data || { name: 'root', children: [] };
+    const root = d3.hierarchy(hierarchyData)
+      .sum((d: any) => d.value || 0);
 
     d3.partition()
       .size([2 * Math.PI, radius])
@@ -903,7 +916,20 @@ export class D3ChartBuilder {
 
     this.addTitle(svg, payload.title, width);
 
-    const stages = payload.stages;
+    // Support both stages array and x/series format
+    let stages: any[];
+    if (payload.stages) {
+      stages = payload.stages;
+    } else if (payload.x && payload.series && payload.series[0]) {
+      // Convert x/series to stages format
+      stages = payload.x.map((label: string, i: number) => ({
+        label,
+        value: payload.series[0].values[i]
+      }));
+    } else {
+      stages = [];
+    }
+
     const maxValue = (d3.max(stages, (s: any) => Number(s.value)) as number) || 100;
     const stageHeight = chartHeight / stages.length;
     const colors = this.getColors(payload);

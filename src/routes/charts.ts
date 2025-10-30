@@ -26,9 +26,12 @@ router.get('/serve/:fileName', async (req, res) => {
       return res.status(400).json({ error: 'Invalid file name' });
     }
     
-    // Ensure it's a PNG file
-    if (!fileName.endsWith('.png')) {
-      return res.status(400).json({ error: 'Only PNG files are supported' });
+    // Support both PNG and SVG files (D3.js generates SVG)
+    const isPng = fileName.endsWith('.png');
+    const isSvg = fileName.endsWith('.svg');
+    
+    if (!isPng && !isSvg) {
+      return res.status(400).json({ error: 'Only PNG and SVG files are supported' });
     }
     
     const filePath = join(process.cwd(), 'public', 'charts', fileName);
@@ -36,7 +39,9 @@ router.get('/serve/:fileName', async (req, res) => {
     // Read and serve the file
     const fileBuffer = await readFile(filePath);
     
-    res.setHeader('Content-Type', 'image/png');
+    // Set correct Content-Type based on file extension
+    const contentType = isSvg ? 'image/svg+xml' : 'image/png';
+    res.setHeader('Content-Type', contentType);
     res.setHeader('Cache-Control', 'public, max-age=86400'); // Cache for 1 day
     res.send(fileBuffer);
     

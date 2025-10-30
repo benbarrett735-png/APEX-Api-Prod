@@ -496,7 +496,7 @@ router.get('/runs/:runId', requireAuth, async (req, res) => {
     
     console.log(`[Poll] runId=${runId}, cursor=${hasCursor ? cursor : 'NONE'}, userId=${userId}`);
     
-    // BRANCH 1: Cursor-based polling (research, reports, templates)
+    // BRANCH 1: Cursor-based polling (research, reports, templates ONLY)
     if (hasCursor) {
       // Detect type from runId prefix
       const isResearch = runId.startsWith('run_');
@@ -504,17 +504,74 @@ router.get('/runs/:runId', requireAuth, async (req, res) => {
       const isTemplate = runId.startsWith('tpl_');
       
       if (isResearch || isReport || isTemplate) {
-      // Research/Reports/Templates mode - all use o1_research tables
-      const runResult = await dbQuery(
-        `SELECT status, query as goal, created_at, updated_at 
-         FROM o1_research_runs 
-         WHERE id = $1 AND user_id = $2`,
-        [runId, userId]
-      );
-      
-      if (runResult.rows.length === 0) {
-        return res.status(404).json({ error: 'Research run not found' });
-      }
+        // First, check if this is actually in agentic_runs (charts use run_ prefix too)
+        const agenticCheck = await dbQuery(
+          `SELECT run_id FROM agentic_runs WHERE run_id = $1 AND user_id = $2`,
+          [runId, userId]
+        );
+        
+        // If found in agentic_runs, it's a chart → get report content from artifacts
+        if (agenticCheck.rows.length > 0) {
+          console.log(`[Poll] run_ prefix but found in agentic_runs (chart) - getting report content`);
+          
+          // Get final run status
+          const runResult = await dbQuery(
+            `SELECT status, goal, started_at, finished_at 
+             FROM agentic_runs 
+             WHERE run_id = $1 AND user_id = $2`,
+            [runId, userId]
+          );
+          
+          if (runResult.rows.length === 0) {
+            return res.status(404).json({ error: 'Run not found' });
+          }
+          
+          const run = runResult.rows[0];
+          const isDone = run.status === 'completed' || run.status === 'failed';
+          
+          // Get report artifact (contains chart data)
+          const artifactsResult = await dbQuery(
+            `SELECT id, artifact_key, uri, type, meta 
+             FROM agentic_artifacts 
+             WHERE run_id = $1 AND type = 'assemble_report' 
+             ORDER BY created_at DESC 
+             LIMIT 1`,
+            [runId]
+          );
+          
+          let reportContent = '';
+          if (artifactsResult.rows.length > 0) {
+            const artifact = artifactsResult.rows[0];
+            const meta = artifact.meta || {};
+            const report = meta.report || {};
+            reportContent = report.full_content || '';
+            console.log(`[Poll] Found report artifact with content length: ${reportContent.length}`);
+          }
+          
+          // Return in STATUS-BASED format (what Portal expects for charts)
+          return res.json({
+            run_id: runId,
+            status: run.status,
+            goal: run.goal,
+            report_content: reportContent || null,  // ✅ Portal expects this!
+            steps: [],
+            artifacts: [],
+            started_at: run.started_at,
+            finished_at: run.finished_at
+          });
+        }
+        
+        // Research/Reports/Templates mode - use o1_research tables
+        const runResult = await dbQuery(
+          `SELECT status, query as goal, created_at, updated_at 
+           FROM o1_research_runs 
+           WHERE id = $1 AND user_id = $2`,
+          [runId, userId]
+        );
+        
+        if (runResult.rows.length === 0) {
+          return res.status(404).json({ error: 'Research run not found' });
+        }
       
       const run = runResult.rows[0];
       const isDone = run.status === 'completed' || run.status === 'error';
@@ -581,106 +638,6 @@ router.get('/runs/:runId', requireAuth, async (req, res) => {
         : cursor;
       
       console.log(`[Cursor Poll] Research: ${items.length} items, cursor=${newCursor}, done=${isDone}`);
-      
-      return res.json({
-        items,
-        cursor: newCursor,
-        done: isDone,
-        status: run.status,
-        goal: run.goal
-      });
-      
-                } else {
-      // Agent mode (reports, templates, charts) - use agentic tables
-      const runResult = await dbQuery(
-        `SELECT status, goal, started_at, finished_at 
-         FROM agentic_runs 
-         WHERE run_id = $1 AND user_id = $2`,
-        [runId, userId]
-      );
-      
-      if (runResult.rows.length === 0) {
-        return res.status(404).json({ error: 'Run not found' });
-      }
-      
-      const run = runResult.rows[0];
-      const isDone = run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled';
-      
-      // Get new events since cursor (using BIGSERIAL id as cursor)
-      const eventsResult = await dbQuery(
-        `SELECT id, event_type, payload, ts 
-         FROM agentic_events 
-         WHERE run_id = $1 AND id > $2 
-         ORDER BY id ASC 
-         LIMIT 100`,
-        [runId, cursor]
-      );
-      
-      // Transform events to Portal format
-      const items = eventsResult.rows.map((event: any) => {
-        const payload = event.payload || {};
-        
-        // Map our event types to Portal's expected types
-        switch (event.event_type) {
-          case 'thinking':
-          case 'thought':
-            return {
-              type: 'thinking',
-              thought: payload.thought || payload.text || 'Processing...',
-              thought_type: payload.thought_type || 'planning'
-            };
-            
-          case 'tool_call':
-          case 'tool.started':
-            return {
-              type: 'tool_call',
-              tool: payload.tool || payload.tool_name,
-              purpose: payload.purpose || payload.reasoning
-            };
-            
-          case 'tool_result':
-          case 'tool.completed':
-            return {
-              type: 'tool_result',
-              tool: payload.tool || payload.tool_name,
-              findings_count: payload.findings_count || payload.results?.length || 0
-            };
-            
-          case 'text_delta':
-          case 'output_chunk':
-            return {
-              type: 'text_delta',
-              text: payload.text || payload.content
-            };
-            
-          case 'section_completed':
-            return {
-              type: 'section_completed',
-              section: payload.section,
-              preview: payload.preview
-            };
-            
-          case 'completed':
-            return {
-              type: 'completed',
-              content: payload.content || payload.report_content
-            };
-            
-          default:
-            // Pass through unknown events
-            return {
-              type: event.event_type,
-              ...payload
-            };
-        }
-      });
-      
-      // Get highest event ID as new cursor
-      const newCursor = eventsResult.rows.length > 0 
-        ? eventsResult.rows[eventsResult.rows.length - 1].id 
-        : cursor;
-      
-      console.log(`[Cursor Poll] Agent: ${items.length} items, cursor=${newCursor}, done=${isDone}`);
       
       return res.json({
         items,
