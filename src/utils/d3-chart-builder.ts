@@ -11,7 +11,7 @@
 
 import * as d3 from 'd3';
 import { JSDOM } from 'jsdom';
-import { writeFile } from 'fs/promises';
+import { writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { randomBytes } from 'crypto';
@@ -123,6 +123,9 @@ export class D3ChartBuilder {
     const tempDir = join(tmpdir(), 'nomad-charts');
     const outputPath = join(tempDir, `${chartId}.svg`);
 
+    // Ensure directory exists (critical for AWS App Runner!)
+    await mkdir(tempDir, { recursive: true });
+    
     await writeFile(outputPath, svgHtml);
     console.log(`[D3Builder] ✅ Chart saved: ${outputPath}`);
 
