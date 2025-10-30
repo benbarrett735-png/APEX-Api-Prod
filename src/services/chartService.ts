@@ -9,13 +9,13 @@
  * 6. Return chart image
  */
 
-import { spawn } from 'child_process';
 import { writeFile, mkdir, readFile } from 'fs/promises';
 import { join, basename } from 'path';
 import { tmpdir } from 'os';
 import { randomBytes } from 'crypto';
 import { parseAccountFromConnectionString, generateReadBlobSasUrl } from './azureBlob.js';
 import { BlobServiceClient } from '@azure/storage-blob';
+import { D3ChartBuilder } from '../utils/d3-chart-builder.js';
 
 type ChartType = 'line' | 'area' | 'bar' | 'pie' | 'scatter' | 'bubble' | 'funnel' | 'heatmap' | 'radar' | 'sankey' | 'sunburst' | 'treemap' | 'candlestick' | 'flow' | 'gantt' | 'stackedbar' | 'themeriver' | 'wordcloud';
 type DataSourceType = 'user_only' | 'external' | 'both';
@@ -89,13 +89,13 @@ export class ChartService {
 
       console.log('[ChartService] ✅ APIM returned formatted payload');
 
-      // Execute Python builder (normalization happens inside)
-      const chartPath = await this.executePythonBuilder(request.chartType, formattedPayload);
+      // Execute D3 chart builder (Node.js - no Python needed!)
+      const chartPath = await this.executeD3Builder(request.chartType, formattedPayload);
 
       // Upload chart
       const chartUrl = await this.uploadChart(chartPath);
 
-      const chartId = chartPath.split('/').pop()?.replace('.png', '') || randomBytes(8).toString('hex');
+      const chartId = chartPath.split('/').pop()?.replace(/\.(png|svg)$/, '') || randomBytes(8).toString('hex');
 
       console.log(`[ChartService] ✅ Chart generated successfully: ${chartUrl}`);
 
@@ -1891,83 +1891,27 @@ Required JSON structure:
 
 
   /**
-   * Execute Python builder
+   * Execute D3 chart builder (Node.js)
    */
-  private async executePythonBuilder(chartType: ChartType, payload: any): Promise<string> {
-    // CRITICAL: Normalize payload to fix any APIM mistakes before Python
-    console.log(`[ChartService] Normalizing ${chartType} payload before Python...`);
+  private async executeD3Builder(chartType: ChartType, payload: any): Promise<string> {
+    // CRITICAL: Normalize payload to fix any APIM mistakes before D3
+    console.log(`[ChartService] Normalizing ${chartType} payload before D3...`);
     payload = this.normalizeChartPayload(chartType, payload);
     
-    // Create temp directory for this chart
-    const chartId = randomBytes(8).toString('hex');
-    const tempDir = join(tmpdir(), 'nomad-charts');
-    await mkdir(tempDir, { recursive: true });
+    console.log(`[ChartService] Executing D3 builder for ${chartType}`);
     
-    const payloadPath = join(tempDir, `${chartId}-input.json`);
-    const outputPath = join(tempDir, `${chartId}.png`);
-
-    // Write payload to file
-    await writeFile(payloadPath, JSON.stringify(payload, null, 2));
-
-    console.log(`[ChartService] Executing Python builder for ${chartType}`);
-    console.log(`[ChartService] Payload: ${payloadPath}`);
-    console.log(`[ChartService] Output: ${outputPath}`);
-
-    // Map chart types to Python script names
-    // Handle name variations: 'stackbar' → 'stackedbar', 'theme river' → 'themeriver'
-    let scriptName = chartType.toLowerCase().replace(/\s+/g, '');
-    if (scriptName === 'stackbar') scriptName = 'stackedbar';
+    // Create D3 builder instance
+    const d3Builder = new D3ChartBuilder();
     
-    // Execute the Python script
-    const scriptPath = join(process.cwd(), 'scripts', `build_${scriptName}.py`);
-    
-    return new Promise((resolve, reject) => {
-      const pythonProcess = spawn('python3', [scriptPath, payloadPath, outputPath]);
-      
-      let stdout = '';
-      let stderr = '';
-      let isResolved = false;
-      
-      // Add timeout to prevent hanging Python scripts
-      const timeoutId = setTimeout(() => {
-        if (!isResolved) {
-          isResolved = true;
-          pythonProcess.kill('SIGTERM');
-          console.error('[ChartService] Python execution timed out after 60s');
-          reject(new Error('Chart generation timed out - Python script took too long'));
-        }
-      }, 60000); // 60 second timeout for Python execution
-      
-      pythonProcess.stdout.on('data', (data) => {
-        stdout += data.toString();
-      });
-      
-      pythonProcess.stderr.on('data', (data) => {
-        stderr += data.toString();
-      });
-      
-      pythonProcess.on('close', (code) => {
-        if (isResolved) return; // Already timed out
-        isResolved = true;
-        clearTimeout(timeoutId);
-        
-        if (code !== 0) {
-          console.error('[ChartService] Python execution failed:', stderr);
-          reject(new Error(`Python execution failed: ${stderr}`));
-        } else {
-          console.log('[ChartService] Python execution successful:', stdout);
-          resolve(outputPath);
-        }
-      });
-      
-      pythonProcess.on('error', (error) => {
-        if (isResolved) return; // Already timed out
-        isResolved = true;
-        clearTimeout(timeoutId);
-        console.error('[ChartService] Failed to start Python process:', error);
-        reject(error);
-      });
-    });
+    try {
+      // Build chart using D3 (returns SVG file path)
+      const chartPath = await d3Builder.buildChart(chartType, payload);
+      console.log(`[ChartService] D3 chart generated: ${chartPath}`);
+      return chartPath;
+    } catch (error: any) {
+      console.error('[ChartService] D3 chart generation failed:', error);
+      throw new Error(`D3 chart generation failed: ${error.message}`);
+    }
   }
 
   /**
