@@ -14,8 +14,16 @@ import templatesRouter from "./routes/templates.js";
 const app = express();
 
 const CORS_ORIGIN = process.env.CORS_ORIGIN || "http://localhost:3000";
+// Support comma-separated origins
+const allowedOrigins = CORS_ORIGIN.split(',').map(o => o.trim());
 app.use(cors({
-  origin: CORS_ORIGIN,
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization", "x-correlation-id", "x-org-id", "x-user-id"]
