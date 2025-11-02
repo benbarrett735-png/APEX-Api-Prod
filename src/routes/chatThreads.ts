@@ -219,8 +219,8 @@ router.post("/:id/messages", async (req, res) => {
       return res.status(404).json({ error: "thread_not_found" });
     }
 
-    // Store content as JSONB (supports both string and structured content)
-    const contentJson = typeof content === 'string' ? content : JSON.stringify(content);
+    // Store content as valid JSON (always stringify to ensure valid JSON)
+    const contentJson = JSON.stringify(content);
     
     // Store Portal metadata
     const messageMetadata = {
