@@ -3,6 +3,7 @@ import express from "express";
 import cors from "cors";
 import helmet from "helmet";
 import chatNormalRouter from "./routes/chatNormal.js";
+import chatThreadsRouter from "./routes/chatThreads.js";
 import adiRouter from "./routes/adi.js";
 import agenticFlowRouter from "./routes/agentic-flow.js";
 import outputsRouter from "./routes/outputs.js";
@@ -14,16 +15,8 @@ import templatesRouter from "./routes/templates.js";
 const app = express();
 
 const CORS_ORIGIN = process.env.CORS_ORIGIN || "http://localhost:3000";
-// Support comma-separated origins
-const allowedOrigins = CORS_ORIGIN.split(',').map(o => o.trim());
 app.use(cors({
-  origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
+  origin: CORS_ORIGIN,
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization", "x-correlation-id", "x-org-id", "x-user-id"]
@@ -37,6 +30,7 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 
 // ✅ chat routes
 app.use("/chat/normal", chatNormalRouter);
+app.use("/chat/threads", chatThreadsRouter);
 
 // ✅ ADI routes
 app.use("/adi", adiRouter);
