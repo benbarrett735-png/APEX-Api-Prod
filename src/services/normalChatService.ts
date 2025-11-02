@@ -40,25 +40,40 @@ export class NormalChatService {
 
     console.log('[NormalChat] Calling APIM with', fullMessages.length, 'messages');
 
-    const response = await fetch(chatUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Ocp-Apim-Subscription-Key': this.apimKey
-      },
-      body: JSON.stringify({
-        messages: fullMessages,
-        stream: true
-      })
-    });
+    // Add timeout to prevent App Runner gateway timeout (504)
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 55000); // 55 seconds (before App Runner's 60s timeout)
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('[NormalChat] APIM error:', response.status, errorText);
-      throw new Error(`APIM error: ${response.status} - ${errorText}`);
+    try {
+      const response = await fetch(chatUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Ocp-Apim-Subscription-Key': this.apimKey
+        },
+        body: JSON.stringify({
+          messages: fullMessages,
+          stream: true
+        }),
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('[NormalChat] APIM error:', response.status, errorText);
+        throw new Error(`APIM error: ${response.status} - ${errorText}`);
+      }
+
+      return response;
+    } catch (error: any) {
+      clearTimeout(timeoutId);
+      if (error.name === 'AbortError') {
+        throw new Error('APIM request timed out after 55 seconds');
+      }
+      throw error;
     }
-
-    return response;
   }
 
   /**
