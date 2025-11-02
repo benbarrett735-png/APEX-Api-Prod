@@ -2,8 +2,25 @@
 -- This allows storing agent mode, selected charts/research/templates/plans in thread metadata
 
 -- Convert user_id to TEXT to support Cognito UUID strings (not just PostgreSQL UUIDs)
+-- Split into separate statements to handle errors gracefully
+DO $$
+BEGIN
+  -- Try to alter user_id type, but only if it's currently UUID type
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns 
+    WHERE table_name = 'chat_threads' 
+    AND column_name = 'user_id' 
+    AND data_type = 'uuid'
+  ) THEN
+    ALTER TABLE chat_threads ALTER COLUMN user_id TYPE TEXT USING user_id::TEXT;
+  END IF;
+EXCEPTION WHEN OTHERS THEN
+  -- If already TEXT or conversion fails, continue
+  RAISE NOTICE 'user_id conversion skipped: %', SQLERRM;
+END $$;
+
+-- Add new columns
 ALTER TABLE chat_threads 
-ALTER COLUMN user_id TYPE TEXT USING user_id::TEXT,
 ADD COLUMN IF NOT EXISTS mode TEXT DEFAULT 'agent' CHECK (mode IN ('normal', 'agent')),
 ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb;
 
