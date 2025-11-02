@@ -167,9 +167,16 @@ router.get("/:id/messages", async (req, res) => {
 
     // Transform to Portal message format
     const messages = result.rows.map(row => {
-      const contentJson = typeof row.contentJson === 'string' 
-        ? JSON.parse(row.contentJson) 
-        : row.contentJson;
+      let contentJson;
+      try {
+        contentJson = typeof row.contentJson === 'string' 
+          ? JSON.parse(row.contentJson) 
+          : row.contentJson;
+      } catch (e) {
+        console.error('[ChatThreads] Failed to parse contentJson for message:', row.id, e);
+        // Fallback: treat as plain string
+        contentJson = String(row.contentJson);
+      }
       
       return {
         id: row.id,
