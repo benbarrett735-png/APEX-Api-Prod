@@ -234,7 +234,7 @@ router.post("/:id/messages", async (req, res) => {
     
     const result = await dbQuery(
       `INSERT INTO chat_messages (id, org_id, user_id, thread_id, role, content_json, metadata, created_at)
-       VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, COALESCE(to_timestamp($8 / 1000), NOW()))
+       VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, COALESCE(to_timestamp($8::bigint / 1000.0), NOW()))
        RETURNING id, role, content_json as "contentJson", metadata, created_at as "createdAt"`,
       [
         uuidv4(),
